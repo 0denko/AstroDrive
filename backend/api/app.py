@@ -1,5 +1,7 @@
 import os
+import re
 import json
+import tempfile
 import threading
 import subprocess
 from glob import glob
@@ -26,6 +28,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 UPDATE_SCRIPT = "/opt/astrodrive/deploy/update.sh"
+UPDATE_UNIT = "astrodrive-update.service"
+# update.sh prints "[ 40%] [####    ] Building web interface" between stages.
+UPDATE_PROGRESS_PATTERN = re.compile(r"^\[\s*(\d{1,3})%\]\s*\[[#\s]*\]\s*(.*)$")
 
 MQTT_HOST = os.getenv("MQTT_HOST", "localhost")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
@@ -37,6 +42,12 @@ MOUNT_CONFIG_PATH = Path(os.getenv("MOUNT_CONFIG", "/var/lib/astrodrive/mount-co
 CAMERA_URL = os.getenv("CAMERA_URL", "/camera/?action=stream")
 CAMERA_SNAPSHOT_URL = os.getenv("CAMERA_SNAPSHOT_URL", "http://127.0.0.1:8080/?action=snapshot")
 CAMERA_CAPTURE_PATH = Path(os.getenv("CAMERA_CAPTURE_PATH", "/var/lib/astrodrive/captures"))
+STACK_OUTPUT_PATH = CAMERA_CAPTURE_PATH / "latest.jpg"
+# nginx serves the captures directory, so the stacker log lives outside it
+STACK_LOG_PATH = Path(tempfile.gettempdir()) / "astrodrive-stack.log"
+stack_lock = threading.Lock()
+stack_process: subprocess.Popen | None = None
+stack_frames = {"count": 0}
 mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 mqtt_connected = False
 serial_connection = None
@@ -107,6 +118,92 @@ def camera_device() -> str:
     return next(iter(glob("/dev/video*")), "/dev/video0")
 
 
+# "  exposure_time_absolute 0x009a0902 (int) : min=1 max=5000 step=1 default=157 value=157 flags=inactive"
+CAMERA_CONTROL_PATTERN = re.compile(r"^\s*(\w+)\s+0x[0-9a-fA-F]+\s+\((\w+)\)\s*:\s*(.+)$")
+# v4l2 renamed these controls; which spelling exists depends on the kernel version.
+CAMERA_CONTROL_ALIASES = {
+    "auto_exposure": ("auto_exposure", "exposure_auto"),
+    "exposure": ("exposure_time_absolute", "exposure_absolute"),
+    "gain": ("gain",),
+    "brightness": ("brightness",),
+    "contrast": ("contrast",),
+    "saturation": ("saturation",),
+    "auto_white_balance": ("white_balance_automatic", "white_balance_temperature_auto"),
+    "white_balance_temperature": ("white_balance_temperature",),
+}
+# auto toggles come first: drivers mark the manual controls inactive while auto is engaged.
+CAMERA_CONTROL_ORDER = ("auto_exposure", "auto_white_balance", "exposure", "gain", "brightness", "contrast", "saturation", "white_balance_temperature")
+
+
+def read_camera_controls(device: str) -> tuple[dict[str, dict], str]:
+    try:
+        result = subprocess.run(["v4l2-ctl", "--device", device, "--list-ctrls"], capture_output=True, text=True, check=False)
+    except OSError as error:
+        return {}, str(error)
+    if result.returncode != 0:
+        return {}, result.stderr.strip() or "Camera controls are unavailable"
+    raw: dict[str, dict] = {}
+    for line in result.stdout.splitlines():
+        match = CAMERA_CONTROL_PATTERN.match(line)
+        if not match:
+            continue
+        name, kind, rest = match.groups()
+        entry: dict = {"type": kind}
+        for field in rest.split():
+            key, separator, value = field.partition("=")
+            if not separator:
+                break
+            entry[key] = int(value) if value.lstrip("-").isdigit() else value
+        raw[name] = entry
+
+    controls: dict[str, dict] = {}
+    for field, aliases in CAMERA_CONTROL_ALIASES.items():
+        name = next((alias for alias in aliases if alias in raw), "")
+        if not name:
+            continue
+        entry = raw[name]
+        controls[field] = {
+            "name": name,
+            "type": entry.get("type", "int"),
+            "min": entry.get("min"),
+            "max": entry.get("max"),
+            "step": entry.get("step", 1),
+            "default": entry.get("default"),
+            "value": entry.get("value"),
+            "inactive": entry.get("flags") == "inactive",
+        }
+    return controls, ""
+
+
+def camera_control_values(controls: dict[str, dict]) -> dict:
+    values: dict = {}
+    for field, entry in controls.items():
+        value = entry.get("value")
+        if value is None:
+            continue
+        if field == "auto_exposure":
+            # menu drivers use 1=manual and 3=auto, bool drivers use 0/1
+            values[field] = value != 1 if entry["type"] == "menu" else bool(value)
+        elif field == "auto_white_balance":
+            values[field] = bool(value)
+        else:
+            values[field] = value
+    return values
+
+
+def camera_control_argument(field: str, value, entry: dict) -> int:
+    if field == "auto_exposure":
+        return (3 if value else 1) if entry["type"] == "menu" else int(bool(value))
+    if field == "auto_white_balance":
+        return int(bool(value))
+    number = int(value)
+    if entry["min"] is not None:
+        number = max(number, entry["min"])
+    if entry["max"] is not None:
+        number = min(number, entry["max"])
+    return number
+
+
 class Command(BaseModel):
     command: Literal["enable", "disable", "stop", "move"]
     axis: Literal["ra", "dec"] | None = None
@@ -162,27 +259,39 @@ class TrackingRequest(BaseModel):
 class UpdateResult(BaseModel):
     started: bool
     message: str
+    previous_invocation_id: str = ""
 
 
 class UpdateStatus(BaseModel):
     state: Literal["idle", "running", "failed"]
     detail: str
+    progress: int | None = None
+    invocation_id: str = ""
 
 
 class CameraControls(BaseModel):
-    exposure: int | None = Field(default=None, ge=-20, le=10000)
-    gain: int | None = Field(default=None, ge=0, le=10000)
-    brightness: int | None = Field(default=None, ge=-100, le=100)
-    contrast: int | None = Field(default=None, ge=0, le=100)
-    saturation: int | None = Field(default=None, ge=0, le=100)
-    white_balance_temperature: int | None = Field(default=None, ge=2000, le=10000)
+    exposure: int | None = None
+    gain: int | None = None
+    brightness: int | None = None
+    contrast: int | None = None
+    saturation: int | None = None
+    white_balance_temperature: int | None = None
     auto_exposure: bool | None = None
+    auto_white_balance: bool | None = None
 
 
 class StackRequest(BaseModel):
     frames: int = Field(default=8, ge=2, le=60)
     interval_ms: int = Field(default=250, ge=0, le=10000)
     stretch: float = Field(default=2.0, ge=1, le=10)
+
+
+class StackStatus(BaseModel):
+    state: Literal["idle", "running", "complete", "failed"]
+    detail: str = ""
+    frames: int = 0
+    image_url: str = ""
+    completed_at: str = ""
 
 
 def publish(payload: dict) -> None:
@@ -250,60 +359,162 @@ def status() -> dict:
     }
 
 
+def _update_unit_properties() -> dict[str, str]:
+    names = ("LoadState", "ActiveState", "SubState", "Result", "InvocationID")
+    result = subprocess.run(
+        ["systemctl", "show", UPDATE_UNIT, *(f"--property={name}" for name in names)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+
+
+def _update_unit_log(invocation_id: str) -> list[str]:
+    if not invocation_id:
+        return []
+    result = subprocess.run(
+        ["journalctl", f"_SYSTEMD_INVOCATION_ID={invocation_id}", "-n", "80", "-o", "cat", "--no-pager"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
 @app.post("/api/update", response_model=UpdateResult)
 def trigger_update() -> UpdateResult:
     if not Path(UPDATE_SCRIPT).exists():
         raise HTTPException(status_code=503, detail="Updater is not installed")
     try:
-        result = subprocess.run(["sudo", "-n", "systemctl", "start", "--no-block", "astrodrive-update.service"], capture_output=True, text=True, check=False)
+        previous_invocation_id = _update_unit_properties().get("InvocationID", "")
+        result = subprocess.run(["sudo", "-n", "systemctl", "start", "--no-block", UPDATE_UNIT], capture_output=True, text=True, check=False)
     except OSError as error:
         raise HTTPException(status_code=503, detail="Could not start updater") from error
     if result.returncode != 0:
         raise HTTPException(status_code=503, detail=result.stderr.strip() or "Updater permission is not installed")
-    return UpdateResult(started=True, message="Update started; refresh status in a moment")
+    return UpdateResult(started=True, message="Update started", previous_invocation_id=previous_invocation_id)
 
 
 @app.get("/api/update/status", response_model=UpdateStatus)
 def update_status() -> UpdateStatus:
     try:
-        state = subprocess.run(["systemctl", "is-active", "astrodrive-update.service"], capture_output=True, text=True, check=False).stdout.strip()
-        detail = subprocess.run(["journalctl", "-u", "astrodrive-update.service", "-n", "1", "-o", "cat", "--no-pager"], capture_output=True, text=True, check=False).stdout.strip()
+        properties = _update_unit_properties()
+        invocation_id = properties.get("InvocationID", "")
+        lines = _update_unit_log(invocation_id)
     except OSError as error:
         return UpdateStatus(state="failed", detail=str(error))
-    if state == "active":
-        return UpdateStatus(state="running", detail=detail or "Update is in progress")
-    if state == "failed":
-        return UpdateStatus(state="failed", detail=detail or "Update failed")
-    return UpdateStatus(state="idle", detail=detail or "No update is running")
+
+    if properties.get("LoadState", "not-found") == "not-found":
+        return UpdateStatus(state="failed", detail="Updater service is not installed")
+
+    progress = None
+    stage = ""
+    plain: list[str] = []
+    for line in lines:
+        match = UPDATE_PROGRESS_PATTERN.match(line)
+        if match:
+            progress = int(match.group(1))
+            stage = match.group(2).strip()
+        else:
+            plain.append(line)
+    last_line = plain[-1] if plain else ""
+
+    active_state = properties.get("ActiveState", "")
+    sub_state = properties.get("SubState", "")
+    # A Type=oneshot unit stays in "activating" for the whole run; it is never "active".
+    if active_state == "activating" or (active_state == "active" and sub_state != "exited"):
+        return UpdateStatus(state="running", detail=stage or last_line or "Update is in progress", progress=progress, invocation_id=invocation_id)
+    if active_state == "failed" or properties.get("Result", "success") not in ("success", ""):
+        return UpdateStatus(state="failed", detail=last_line or "Update failed", progress=progress, invocation_id=invocation_id)
+    return UpdateStatus(state="idle", detail=last_line or "No update is running", progress=progress, invocation_id=invocation_id)
 
 
 @app.get("/api/camera/controls")
 def camera_controls() -> dict:
-    result = subprocess.run(["v4l2-ctl", "--device", camera_device(), "--list-ctrls-json"], capture_output=True, text=True, check=False)
-    return {"available": result.returncode == 0, "controls": json.loads(result.stdout) if result.returncode == 0 and result.stdout else {}, "error": result.stderr.strip()}
+    device = camera_device()
+    controls, error = read_camera_controls(device)
+    return {"available": bool(controls), "device": device, "controls": controls, "values": camera_control_values(controls), "error": error}
 
 
 @app.put("/api/camera/controls")
 def set_camera_controls(request: CameraControls) -> dict:
     device = camera_device()
-    values = {"exposure_time_absolute": request.exposure, "gain": request.gain, "brightness": request.brightness, "contrast": request.contrast, "saturation": request.saturation, "white_balance_temperature": request.white_balance_temperature}
-    if request.auto_exposure is not None:
-        values["exposure_auto"] = 3 if request.auto_exposure else 1
-    commands = [f"{key}={value}" for key, value in values.items() if value is not None]
-    if not commands:
+    controls, error = read_camera_controls(device)
+    if not controls:
+        raise HTTPException(status_code=503, detail=error or "Camera controls are unavailable")
+    requested = request.model_dump(exclude_none=True)
+    if not requested:
         raise HTTPException(status_code=400, detail="Choose at least one camera control")
-    result = subprocess.run(["v4l2-ctl", "--device", device, "--set-ctrl", ",".join(commands)], capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        raise HTTPException(status_code=422, detail=result.stderr.strip() or "Camera does not support those controls")
-    return {"applied": values}
+
+    applied: dict = {}
+    unsupported: list[str] = []
+    failures: list[str] = []
+    for field in CAMERA_CONTROL_ORDER:
+        if field not in requested:
+            continue
+        entry = controls.get(field)
+        if entry is None:
+            unsupported.append(field)
+            continue
+        value = camera_control_argument(field, requested[field], entry)
+        # one control per call so an unsupported value cannot discard the whole batch
+        result = subprocess.run(["v4l2-ctl", "--device", device, "--set-ctrl", f"{entry['name']}={value}"], capture_output=True, text=True, check=False)
+        if result.returncode != 0 or "error" in result.stdout.lower():
+            failures.append(f"{field}: {(result.stderr or result.stdout).strip() or 'rejected by the driver'}")
+        else:
+            applied[field] = value
+    if not applied and failures:
+        raise HTTPException(status_code=422, detail="; ".join(failures))
+
+    controls, _ = read_camera_controls(device)
+    return {"applied": applied, "unsupported": unsupported, "failures": failures, "controls": controls, "updated_controls": camera_control_values(controls)}
 
 
-@app.post("/api/camera/stack")
-def stack_camera(request: StackRequest) -> dict:
+@app.post("/api/camera/stack", response_model=StackStatus)
+def stack_camera(request: StackRequest) -> StackStatus:
+    global stack_process
     CAMERA_CAPTURE_PATH.mkdir(parents=True, exist_ok=True)
-    output = CAMERA_CAPTURE_PATH / "latest.jpg"
-    subprocess.Popen(["/usr/bin/python3", "/opt/astrodrive/deploy/stack-camera.py", str(output), CAMERA_SNAPSHOT_URL, str(request.frames), str(request.interval_ms), str(request.stretch)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-    return {"started": True, "frames": request.frames, "image_url": "/captures/latest.jpg"}
+    with stack_lock:
+        if stack_process is not None and stack_process.poll() is None:
+            raise HTTPException(status_code=409, detail="A stack capture is already running")
+        log = STACK_LOG_PATH.open("w")
+        try:
+            stack_process = subprocess.Popen(
+                ["/usr/bin/python3", "/opt/astrodrive/deploy/stack-camera.py", str(STACK_OUTPUT_PATH), CAMERA_SNAPSHOT_URL, str(request.frames), str(request.interval_ms), str(request.stretch)],
+                stdout=log,
+                stderr=log,
+                start_new_session=True,
+            )
+        except OSError as error:
+            raise HTTPException(status_code=503, detail=f"Could not start the stacker: {error}") from error
+        finally:
+            log.close()
+        stack_frames["count"] = request.frames
+    return StackStatus(state="running", detail=f"Stacking {request.frames} frames", frames=request.frames)
+
+
+@app.get("/api/camera/stack", response_model=StackStatus)
+def stack_status() -> StackStatus:
+    with stack_lock:
+        process = stack_process
+        frames = stack_frames["count"]
+    code = process.poll() if process is not None else None
+    if process is not None and code is None:
+        return StackStatus(state="running", detail=f"Stacking {frames} frames", frames=frames)
+    if process is not None and code != 0:
+        log = STACK_LOG_PATH.read_text(errors="replace").strip().splitlines() if STACK_LOG_PATH.exists() else []
+        return StackStatus(state="failed", detail=log[-1] if log else f"Stacker exited with code {code}", frames=frames)
+    if not STACK_OUTPUT_PATH.exists():
+        return StackStatus(state="idle", detail="No stacked frame captured yet")
+    modified = STACK_OUTPUT_PATH.stat().st_mtime
+    return StackStatus(
+        state="complete",
+        detail="Stacked frame ready",
+        frames=frames,
+        image_url=f"/captures/latest.jpg?t={int(modified)}",
+        completed_at=datetime.fromtimestamp(modified, timezone.utc).isoformat(),
+    )
 
 
 @app.put("/api/settings/serial")

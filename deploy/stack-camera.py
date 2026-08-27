@@ -5,24 +5,22 @@ import time
 from pathlib import Path
 from urllib.request import urlopen
 
-from PIL import Image, ImageChops, ImageEnhance, ImageStat
+from PIL import Image, ImageEnhance
 
 output, snapshot_url, frame_count, interval_ms, stretch = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), float(sys.argv[5])
-frames = []
-for _ in range(frame_count):
+result = None
+for index in range(1, frame_count + 1):
     with urlopen(snapshot_url, timeout=10) as response:
-        frames.append(Image.open(io.BytesIO(response.read())).convert("RGB"))
-    time.sleep(interval_ms / 1000)
+        frame = Image.open(io.BytesIO(response.read())).convert("RGB")
+    # running mean, so only two frames are ever held in memory
+    result = frame if result is None else Image.blend(result, frame, 1.0 / index)
+    if index < frame_count:
+        time.sleep(interval_ms / 1000)
 
-width, height = frames[0].size
-accumulator = [0.0] * (width * height * 3)
-for frame in frames:
-    pixels = list(frame.getdata())
-    for index, pixel in enumerate(pixels):
-        offset = index * 3
-        accumulator[offset] += pixel[0]
-        accumulator[offset + 1] += pixel[1]
-        accumulator[offset + 2] += pixel[2]
-result = Image.new("RGB", (width, height))
-result.putdata([tuple(min(255, int(accumulator[index * 3 + channel] / frame_count * stretch)) for channel in range(3)) for index in range(width * height)])
-result.save(output, quality=92)
+if stretch != 1.0:
+    result = ImageEnhance.Brightness(result).enhance(stretch)
+destination = Path(output)
+staging = destination.with_name(destination.name + ".partial")
+result.save(staging, format="JPEG", quality=92)
+# swap in one step so the web server never serves a half-written frame
+staging.replace(destination)

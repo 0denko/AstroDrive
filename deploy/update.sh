@@ -36,6 +36,8 @@ apt-get install -y imagemagick python3-pil
 id -u "$SERVICE_USER" >/dev/null 2>&1 || useradd --system --home "$INSTALL_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
 usermod -aG dialout "$SERVICE_USER"
 usermod -aG video "$SERVICE_USER"
+# the API reads the updater's journal to report live progress
+usermod -aG systemd-journal "$SERVICE_USER"
 install -d -o "$SERVICE_USER" -g "$SERVICE_USER" "$INSTALL_DIR" /etc/astrodrive /var/lib/astrodrive /var/lib/astrodrive/frontend
 cd "$INSTALL_DIR"
 chmod +x "$INSTALL_DIR/deploy/start-camera.sh"
@@ -61,6 +63,7 @@ if ! command -v mjpg_streamer >/dev/null 2>&1 && [[ ! -x /opt/mjpg-streamer/bin/
 fi
 if [[ -f /etc/astrodrive/astrodrive.env ]]; then
   sed -i 's|^CAMERA_URL=http://localhost:8080/|CAMERA_URL=/camera/?action=stream|' /etc/astrodrive/astrodrive.env
+  sed -i 's|^CAMERA_URL=/camera/?action=stream?action=stream$|CAMERA_URL=/camera/?action=stream|' /etc/astrodrive/astrodrive.env
 fi
 
 install -m 0644 "$INSTALL_DIR/deploy/astrodrive-api.service" /etc/systemd/system/
