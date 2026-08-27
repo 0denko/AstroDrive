@@ -21,13 +21,28 @@ app.add_middleware(
 MQTT_HOST = os.getenv("MQTT_HOST", "localhost")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 MQTT_TOPIC = os.getenv("MQTT_TOPIC", "telescope/mount/command")
-SERIAL_PORT = os.getenv("ESP32_SERIAL_PORT", "/dev/ttyUSB0")
+SERIAL_PORT = os.getenv("ESP32_SERIAL_PORT", "auto")
 SERIAL_BAUD = int(os.getenv("ESP32_SERIAL_BAUD", "115200"))
 CAMERA_URL = os.getenv("CAMERA_URL", "http://localhost:8080/?action=stream")
 mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 mqtt_connected = False
 serial_connection = None
 serial_lock = threading.Lock()
+
+
+def connect_serial():
+    candidates = [SERIAL_PORT] if SERIAL_PORT != "auto" else [
+        "/dev/ttyUSB0",
+        "/dev/ttyACM0",
+        "/dev/ttyUSB1",
+        "/dev/ttyACM1",
+    ]
+    for port in candidates:
+        try:
+            return serial.Serial(port, SERIAL_BAUD, timeout=1)
+        except (serial.SerialException, FileNotFoundError):
+            continue
+    return None
 
 
 class Command(BaseModel):
@@ -72,10 +87,7 @@ def connect_mqtt() -> None:
         mqtt_connected = True
     except OSError:
         mqtt_connected = False
-    try:
-        serial_connection = serial.Serial(SERIAL_PORT, SERIAL_BAUD, timeout=1)
-    except serial.SerialException:
-        serial_connection = None
+    serial_connection = connect_serial()
 
 
 @app.on_event("shutdown")
