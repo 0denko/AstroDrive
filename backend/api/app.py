@@ -2,6 +2,7 @@ import os
 import json
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Literal
 
 import paho.mqtt.client as mqtt
@@ -23,15 +24,24 @@ MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 MQTT_TOPIC = os.getenv("MQTT_TOPIC", "telescope/mount/command")
 SERIAL_PORT = os.getenv("ESP32_SERIAL_PORT", "auto")
 SERIAL_BAUD = int(os.getenv("ESP32_SERIAL_BAUD", "115200"))
+SERIAL_CONFIG_PATH = Path(os.getenv("ESP32_SERIAL_CONFIG", "/var/lib/astrodrive/serial-config.json"))
 CAMERA_URL = os.getenv("CAMERA_URL", "http://localhost:8080/?action=stream")
 mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 mqtt_connected = False
 serial_connection = None
 serial_lock = threading.Lock()
+serial_port_name = SERIAL_PORT
 
 
-def connect_serial():
-    candidates = [SERIAL_PORT] if SERIAL_PORT != "auto" else [
+def configured_serial_port() -> str:
+    try:
+        return json.loads(SERIAL_CONFIG_PATH.read_text()).get("port", SERIAL_PORT)
+    except (OSError, json.JSONDecodeError):
+        return SERIAL_PORT
+
+
+def connect_serial(port_name: str):
+    candidates = [port_name] if port_name != "auto" else [
         "/dev/ttyUSB0",
         "/dev/ttyACM0",
         "/dev/ttyUSB1",
@@ -57,6 +67,10 @@ class Target(BaseModel):
     declination: float = Field(ge=-90, le=90)
 
 
+class SerialSettings(BaseModel):
+    port: str = "auto"
+
+
 def publish(payload: dict) -> None:
     delivered = False
     if mqtt_connected:
@@ -80,14 +94,15 @@ def publish(payload: dict) -> None:
 
 @app.on_event("startup")
 def connect_mqtt() -> None:
-    global mqtt_connected, serial_connection
+    global mqtt_connected, serial_connection, serial_port_name
     try:
         mqtt_client.connect(MQTT_HOST, MQTT_PORT, 60)
         mqtt_client.loop_start()
         mqtt_connected = True
     except OSError:
         mqtt_connected = False
-    serial_connection = connect_serial()
+    serial_port_name = configured_serial_port()
+    serial_connection = connect_serial(serial_port_name)
 
 
 @app.on_event("shutdown")
@@ -106,10 +121,25 @@ def status() -> dict:
     return {
         "connected": mqtt_connected,
         "esp32_connected": serial_connection is not None,
+        "serial_port": serial_port_name,
         "mount": "idle",
         "camera_url": CAMERA_URL,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@app.put("/api/settings/serial")
+def update_serial_settings(request: SerialSettings) -> dict:
+    global serial_connection, serial_port_name
+    if request.port != "auto" and not request.port.startswith("/dev/"):
+        raise HTTPException(status_code=422, detail="Serial port must be auto or a /dev path")
+    if serial_connection is not None:
+        serial_connection.close()
+    serial_port_name = request.port
+    SERIAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SERIAL_CONFIG_PATH.write_text(json.dumps({"port": serial_port_name}) + "\n")
+    serial_connection = connect_serial(serial_port_name)
+    return {"port": serial_port_name, "connected": serial_connection is not None}
 
 
 @app.post("/api/command")
