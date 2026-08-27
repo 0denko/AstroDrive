@@ -59,6 +59,7 @@ ln -sfn /etc/nginx/sites-available/astrodrive /etc/nginx/sites-enabled/astrodriv
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
 systemctl daemon-reload
+systemctl enable astrodrive-update.service
 systemctl enable --now astrodrive-api.service
 systemctl enable --now astrodrive-update.timer
 systemctl reload nginx || systemctl restart nginx

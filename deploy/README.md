@@ -18,7 +18,7 @@ To run an update manually, use `sudo bash /opt/astrodrive/deploy/update.sh`. The
 
 ## Updates and restarts
 
-`astrodrive-update.service` fetches the configured branch and exits immediately when it is already current. When a commit is available, it updates only the affected layer: backend changes refresh Python dependencies, frontend changes rebuild the UI, and `esp32/` changes build/upload firmware. `astrodrive-update.timer` checks every 15 minutes, so a new commit is deployed without waiting for a reboot. Review `sudo journalctl -u astrodrive-update` when diagnosing an update. Set `ESP32_AUTO_FLASH=false` to disable automatic firmware uploads.
+`astrodrive-update.service` fetches the configured branch and exits immediately when it is already current. It is enabled at boot, and the API is ordered after it without a circular dependency. When a commit is available, it updates only the affected layer: backend changes refresh Python dependencies, frontend changes rebuild the UI, and `esp32/` changes build/upload firmware. `astrodrive-update.timer` checks every 15 minutes, so a new commit is deployed without waiting for a reboot. Review `sudo journalctl -u astrodrive-update` when diagnosing an update. Set `ESP32_AUTO_FLASH=false` to disable automatic firmware uploads.
 
 ## Cloud-init
 
