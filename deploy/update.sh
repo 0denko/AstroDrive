@@ -39,8 +39,15 @@ cd "$INSTALL_DIR"
 chmod +x "$INSTALL_DIR/deploy/start-camera.sh"
 git config --global --add safe.directory "$INSTALL_DIR"
 
-if ! command -v mjpg_streamer >/dev/null 2>&1 && [[ ! -x /opt/mjpg-streamer/mjpg_streamer ]]; then
-  apt-get update -qq
+progress 1 5 "Checking for source updates"
+previous_revision="$(git rev-parse HEAD 2>/dev/null || true)"
+if [[ "${1:-}" != "--skip-fetch" ]]; then
+  git fetch origin "$BRANCH"
+  git checkout "$BRANCH"
+  git reset --hard "origin/$BRANCH"
+fi
+
+if ! command -v mjpg_streamer >/dev/null 2>&1 && [[ ! -x /opt/mjpg-streamer/bin/mjpg_streamer && ! -x /opt/mjpg-streamer/mjpg_streamer ]]; then
   apt-get install -y v4l-utils build-essential cmake libjpeg-dev
   rm -rf /tmp/mjpg-streamer
   git clone --depth 1 https://github.com/jacksonliam/mjpg-streamer.git /tmp/mjpg-streamer
@@ -51,14 +58,6 @@ if ! command -v mjpg_streamer >/dev/null 2>&1 && [[ ! -x /opt/mjpg-streamer/mjpg
 fi
 if [[ -f /etc/astrodrive/astrodrive.env ]]; then
   sed -i 's|^CAMERA_URL=http://localhost:8080/|CAMERA_URL=/camera/?action=stream|' /etc/astrodrive/astrodrive.env
-fi
-
-progress 1 5 "Checking for source updates"
-previous_revision="$(git rev-parse HEAD 2>/dev/null || true)"
-if [[ "${1:-}" != "--skip-fetch" ]]; then
-  git fetch origin "$BRANCH"
-  git checkout "$BRANCH"
-  git reset --hard "origin/$BRANCH"
 fi
 
 install -m 0644 "$INSTALL_DIR/deploy/astrodrive-api.service" /etc/systemd/system/
