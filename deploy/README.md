@@ -2,11 +2,13 @@
 
 ## One-command install
 
-Replace the repository URL with the real GitHub repository:
+The published repository is the default, so the Pi setup can be one command after Ubuntu is running:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/OWNER/AstroDrive/main/deploy/install.sh | sudo bash -s -- https://github.com/OWNER/AstroDrive.git
+curl -fsSL https://raw.githubusercontent.com/0denko/AstroDrive/main/deploy/install.sh | sudo bash
 ```
+
+To deploy a fork, pass its repository URL after the script: `... | sudo bash -s -- https://github.com/OWNER/REPO`.
 
 The installer installs Python, Node.js, Nginx, and Git; clones the selected branch to `/opt/astrodrive`; creates the `astrodrive` service account; builds the API and UI; and enables the API plus Nginx at boot.
 

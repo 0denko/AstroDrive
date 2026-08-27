@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-REPO_URL="${1:-${ASTRODRIVE_REPO_URL:-}}"
+REPO_URL="${1:-${ASTRODRIVE_REPO_URL:-https://github.com/0denko/AstroDrive}}"
 INSTALL_DIR="${ASTRODRIVE_INSTALL_DIR:-/opt/astrodrive}"
 BRANCH="${ASTRODRIVE_BRANCH:-main}"
 SERVICE_USER="astrodrive"
 
-if [[ -z "$REPO_URL" ]]; then
-  echo "Usage: curl -fsSL <raw-install-url> | sudo bash -s -- <git-repository-url>"
-  exit 2
-fi
 if [[ $EUID -ne 0 ]]; then
   echo "Run this installer with sudo."
   exit 1
