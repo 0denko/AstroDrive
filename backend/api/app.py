@@ -300,10 +300,11 @@ class StackRequest(BaseModel):
     # 0 keeps stacking until it is stopped, republishing the preview after every frame
     frames: int = Field(default=8, ge=0, le=600)
     interval_ms: int = Field(default=250, ge=0, le=10000)
-    # averaging frames removes noise but never brightens, so the gain carries the whole exposure
-    # lift; 0 derives it from the frame instead, which a hand-picked number rarely gets right
+    # averaging frames removes noise but never brightens, so the stretch carries the whole exposure
+    # lift; 0 fits the curve to the frame instead, which a hand-picked number rarely gets right
     stretch: float = Field(default=0.0, ge=0, le=64)
-    gamma: float = Field(default=2.2, ge=1, le=5)
+    # the fitted curve already sets the tone, so this is an extra bend and stays off by default
+    gamma: float = Field(default=1.0, ge=1, le=5)
 
 
 class StackStatus(BaseModel):
