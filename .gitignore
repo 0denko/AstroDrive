@@ -1,0 +1,6 @@
+backend/api/.venv/
+frontend/ui/node_modules/
+frontend/ui/dist/
+__pycache__/
+*.py[cod]
+.env

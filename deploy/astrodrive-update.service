@@ -1,0 +1,10 @@
+[Unit]
+Description=Update AstroDrive from Git before services start
+Wants=network-online.target
+After=network-online.target
+Before=astrodrive-api.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/astrodrive/deploy/update.sh
+User=root

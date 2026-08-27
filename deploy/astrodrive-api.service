@@ -1,0 +1,18 @@
+[Unit]
+Description=AstroDrive FastAPI backend
+Requires=astrodrive-update.service
+After=network-online.target astrodrive-update.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=astrodrive
+Group=astrodrive
+WorkingDirectory=/opt/astrodrive/backend/api
+EnvironmentFile=/etc/astrodrive/astrodrive.env
+ExecStart=/opt/astrodrive/backend/api/.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

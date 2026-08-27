@@ -1,0 +1,11 @@
+[Unit]
+Description=Check AstroDrive for updates periodically
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Persistent=true
+Unit=astrodrive-update.service
+
+[Install]
+WantedBy=timers.target
