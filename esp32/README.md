@@ -12,4 +12,4 @@ Update the pin constants in `main.cpp` for your board. The default pins are RA s
 
 ## Serial protocol
 
-At `115200` baud, send newline-delimited commands: `enable`, `disable`, `stop`, or `status`. Responses are compact JSON lines. Motion planning and limits should be added before closed-loop operation.
+At `115200` baud over the USB cable to the Pi, send newline-delimited commands: `enable`, `disable`, `stop`, `status`, or `move ra forward 10` / `move dec backward 10`. Responses are compact JSON lines. Motion planning and limits should be added before closed-loop operation.

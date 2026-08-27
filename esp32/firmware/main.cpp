@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <cstring>
 #include "StepperMotor.h"
 
 namespace {
@@ -31,6 +32,26 @@ void handleCommand(String command) {
   } else if (command == "status") {
     Serial.println(String("{\"ok\":true,\"enabled\":") +
                    (raMotor.isEnabled() && decMotor.isEnabled() ? "true}" : "false}"));
+  } else if (command.startsWith("move ")) {
+    char axis[8] = {};
+    char direction[10] = {};
+    int steps = 0;
+    if (sscanf(command.c_str(), "move %7s %9s %d", axis, direction, &steps) == 3 && steps >= 0) {
+      StepperMotor *motor = strcmp(axis, "ra") == 0 ? &raMotor : &decMotor;
+      if (strcmp(axis, "ra") != 0 && strcmp(axis, "dec") != 0) {
+        Serial.println("{\"ok\":false,\"error\":\"invalid_axis\"}");
+        return;
+      }
+      const bool forward = strcmp(direction, "forward") == 0;
+      if (!forward && strcmp(direction, "backward") != 0) {
+        Serial.println("{\"ok\":false,\"error\":\"invalid_direction\"}");
+        return;
+      }
+      for (int step = 0; step < steps; ++step) motor->step(forward);
+      report("move_complete");
+    } else {
+      Serial.println("{\"ok\":false,\"error\":\"invalid_move\"}");
+    }
   } else {
     Serial.println("{\"ok\":false,\"error\":\"unknown_command\"}");
   }
