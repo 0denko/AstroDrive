@@ -19,6 +19,18 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
+timer_was_active=false
+if systemctl is-active --quiet astrodrive-update.timer; then
+  timer_was_active=true
+  systemctl stop astrodrive-update.timer
+fi
+restore_timer() {
+  if [[ "$timer_was_active" == true ]]; then
+    systemctl enable --now astrodrive-update.timer >/dev/null 2>&1 || true
+  fi
+}
+trap restore_timer EXIT
+
 export DEBIAN_FRONTEND=noninteractive
 progress 1 8 "Updating package lists"
 apt-get update

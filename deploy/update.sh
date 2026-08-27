@@ -22,6 +22,12 @@ if [[ $EUID -ne 0 ]]; then
   echo "Run the updater as root."
   exit 1
 fi
+
+exec 9>/run/lock/astrodrive-update.lock
+if ! flock -n 9; then
+  echo "Another AstroDrive update is already running; skipping this run."
+  exit 0
+fi
 cd "$INSTALL_DIR"
 git config --global --add safe.directory "$INSTALL_DIR"
 
