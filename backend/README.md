@@ -14,6 +14,6 @@ Connect the ESP32 to the Pi with a USB data cable. `ESP32_SERIAL_PORT=auto` trie
 
 The web UI sends commands to FastAPI. FastAPI forwards them over USB serial using `enable`, `disable`, `stop`, `move <ra|dec> <forward|backward> <steps>`, and `configure <RA step> <RA dir> <RA enable> <DEC step> <DEC dir> <DEC enable> <active-low>`. MQTT is an additional command publication path for other services. The serial port can be changed from the web UI; it is stored in `/var/lib/astrodrive/serial-config.json` and takes effect immediately. Driver settings are stored on both the Pi and ESP32.
 
-The installer starts `mjpg-streamer` for a USB webcam at `/dev/video0` and the UI consumes it through `/camera/`, so phones and computers do not interpret `localhost` as their own machine. Set `CAMERA_URL` in `/etc/astrodrive/astrodrive.env` if using another camera server.
+The installer starts `mjpg-streamer` for a USB webcam and the UI consumes it through `/camera/`, so phones and computers do not interpret `localhost` as their own machine. `CAMERA_DEVICE=auto` scans `/dev/video*`; set it to an exact path such as `/dev/video1` in `/etc/astrodrive/astrodrive.env` when multiple cameras are connected. Set `CAMERA_URL` if using another camera server.
 
 Endpoints include `GET /api/status`, `POST /api/command`, and `POST /api/target`.

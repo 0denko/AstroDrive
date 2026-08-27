@@ -5,6 +5,7 @@ Wants=dev-video0.device
 
 [Service]
 Type=simple
+EnvironmentFile=-/etc/astrodrive/astrodrive.env
 ExecStart=/bin/bash /opt/astrodrive/deploy/start-camera.sh
 Restart=on-failure
 RestartSec=5
