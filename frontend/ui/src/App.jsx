@@ -144,15 +144,19 @@ export default function App() {
   useEffect(() => { if (status?.serial_port) setSerialPort(status.serial_port); if (status?.mount_config) setMount(status.mount_config); if (status?.location) setLocation(status.location); }, [status]);
 
   const updateBusy = updating || updateStatus.state === 'running';
-  const updateProgress = typeof updateStatus.progress === 'number' ? `${updateStatus.progress}% ` : '';
-  const updateLabel = updateStatus.state === 'running' ? `UPDATE RUNNING: ${updateProgress}${updateStatus.detail}`
+  const updatePercent = typeof updateStatus.progress === 'number' ? updateStatus.progress : null;
+  const updateLabel = updateStatus.state === 'running' ? `Updating: ${updatePercent === null ? '' : `${updatePercent}% `}${updateStatus.detail}`
     : updateStatus.state === 'offline' ? updateStatus.detail
-    : updateStatus.state === 'failed' ? `UPDATE FAILED: ${updateStatus.detail}`
+    : updateStatus.state === 'failed' ? `Update failed: ${updateStatus.detail}`
     : updating ? 'Waiting for the updater to start...'
-    : updateStatus.detail || 'UPDATES READY';
+    : 'Check for updates';
+  // the ring tracks a live run only, so a finished run's lingering 100% does not read as pending work
+  const ringPercent = updateBusy && updatePercent !== null ? updatePercent : 0;
+  const ringState = updateStatus.state === 'failed' ? 'failed' : !updateBusy ? 'idle' : updatePercent === null ? 'spinning' : '';
+  const ringGlyph = updateStatus.state === 'failed' ? '!' : !updateBusy ? '↓' : updatePercent === null ? '' : `${updatePercent}%`;
 
   return <main>
-    <header><div><span className="eyebrow">MOUNT CONTROL / LIVE</span><h1>AstroDrive</h1></div><div className="status-stack"><div className="status-badges"><span className={`connection ${status?.esp32_connected ? 'online' : ''}`}>{status?.esp32_connected ? 'ESP32 ONLINE' : 'ESP32 OFFLINE'}</span><span className={`connection ${status?.mount === 'aligned' || status?.mount === 'tracking' ? 'online' : ''}`}>MOUNT {status?.mount?.replaceAll('_', ' ').toUpperCase() ?? 'CHECKING'}</span></div><div className="update-row"><button className="update-button" onClick={triggerUpdate} disabled={updateBusy}>{updateBusy ? 'UPDATING...' : 'CHECK FOR UPDATES'}</button><span className="update-detail">{updateLabel}</span></div></div></header>
+    <header><div><span className="eyebrow">MOUNT CONTROL / LIVE</span><h1>AstroDrive</h1></div><div className="status-stack"><div className="status-badges"><span className={`connection ${status?.esp32_connected ? 'online' : ''}`}>{status?.esp32_connected ? 'ESP32 ONLINE' : 'ESP32 OFFLINE'}</span><span className={`connection ${status?.mount === 'aligned' || status?.mount === 'tracking' ? 'online' : ''}`}>MOUNT {status?.mount?.replaceAll('_', ' ').toUpperCase() ?? 'CHECKING'}</span></div><div className="update-row" title={updateLabel}><button className={`update-ring ${ringState}`} style={{ '--progress': ringPercent }} onClick={triggerUpdate} disabled={updateBusy} aria-label={updateLabel} role="progressbar" aria-valuenow={ringPercent}><span>{ringGlyph}</span></button>{updateStatus.state === 'failed' && <span className="update-detail">{updateStatus.detail}</span>}</div></div></header>
     <section className="grid">
       <div className="panel camera"><div className="panel-heading"><span>Sky camera</span><span className="live-dot">● LIVE</span></div>{status?.camera_url ? <img src={status.camera_url} alt="Live sky camera" /> : <div className="empty">Waiting for camera stream</div>}</div>
       <form className="panel camera-settings" onSubmit={saveCameraControls}><div className="panel-heading"><span>Camera controls</span><span>{cameraMeta.available ? 'V4L2' : 'UNAVAILABLE'}</span></div>{cameraMeta.available ? <><div className="fields">{CAMERA_FIELDS.filter((field) => cameraMeta.controls[field.key]).map((field) => { const meta = cameraMeta.controls[field.key]; return <label key={field.key}>{field.label}{field.toggle ? <select value={cameraControls[field.key] ? 'on' : 'off'} onChange={(event) => setCameraControls({ ...cameraControls, [field.key]: event.target.value === 'on' })}><option value="on">ON</option><option value="off">OFF</option></select> : <input type="number" min={meta.min ?? undefined} max={meta.max ?? undefined} step={meta.step || 1} title={meta.inactive ? 'Driver ignores this until the matching auto control is off' : `${meta.min}..${meta.max}`} value={cameraControls[field.key] ?? ''} onChange={(event) => setCameraControls({ ...cameraControls, [field.key]: event.target.value })} />}</label>; })}</div><button className="primary" type="submit">Apply camera settings</button></> : <p>{cameraMeta.error || 'This camera exposes no V4L2 controls'}</p>}</form>
