@@ -29,6 +29,12 @@ if ! flock -n 9; then
   echo "Another AstroDrive update is already running; skipping this run."
   exit 0
 fi
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y git python3 python3-venv python3-pip nginx nodejs npm v4l-utils build-essential cmake libjpeg-dev
+id -u "$SERVICE_USER" >/dev/null 2>&1 || useradd --system --home "$INSTALL_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
+usermod -aG dialout "$SERVICE_USER"
+install -d -o "$SERVICE_USER" -g "$SERVICE_USER" "$INSTALL_DIR" /etc/astrodrive /var/lib/astrodrive /var/lib/astrodrive/frontend
 cd "$INSTALL_DIR"
 chmod +x "$INSTALL_DIR/deploy/start-camera.sh"
 git config --global --add safe.directory "$INSTALL_DIR"
@@ -59,12 +65,14 @@ install -m 0644 "$INSTALL_DIR/deploy/astrodrive-api.service" /etc/systemd/system
 install -m 0644 "$INSTALL_DIR/deploy/astrodrive-update.service" /etc/systemd/system/
 install -m 0644 "$INSTALL_DIR/deploy/astrodrive-update.timer" /etc/systemd/system/
 install -m 0644 "$INSTALL_DIR/deploy/astrodrive-camera.service" /etc/systemd/system/
+install -m 0440 "$INSTALL_DIR/deploy/astrodrive-update.sudoers" /etc/sudoers.d/astrodrive-update
 if command -v nginx >/dev/null 2>&1; then
   install -m 0644 "$INSTALL_DIR/deploy/astrodrive.nginx" /etc/nginx/sites-available/astrodrive
   ln -sfn /etc/nginx/sites-available/astrodrive /etc/nginx/sites-enabled/astrodrive
   rm -f /etc/nginx/sites-enabled/default
 fi
 systemctl daemon-reload
+visudo -cf /etc/sudoers.d/astrodrive-update
 systemctl enable astrodrive-api.service astrodrive-camera.service astrodrive-update.service astrodrive-update.timer >/dev/null
 firmware_changed=false
 if [[ "${1:-}" == "--skip-fetch" ]] || [[ -z "$previous_revision" ]] || ! git diff --quiet "$previous_revision" HEAD -- esp32; then
