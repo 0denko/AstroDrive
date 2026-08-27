@@ -28,16 +28,32 @@ if [[ "${1:-}" != "--skip-fetch" ]]; then
   git fetch origin "$BRANCH"
   git checkout "$BRANCH"
   git reset --hard "origin/$BRANCH"
+  if [[ "$previous_revision" == "$(git rev-parse HEAD)" ]]; then
+    echo "AstroDrive is already up to date."
+    exit 0
+  fi
 fi
 firmware_changed=false
 if [[ "${1:-}" == "--skip-fetch" ]] || [[ -z "$previous_revision" ]] || ! git diff --quiet "$previous_revision" HEAD -- esp32; then
   firmware_changed=true
 fi
+backend_changed=false
+if [[ "${1:-}" == "--skip-fetch" ]] || [[ -z "$previous_revision" ]] || ! git diff --quiet "$previous_revision" HEAD -- backend; then
+  backend_changed=true
+fi
+frontend_changed=false
+if [[ "${1:-}" == "--skip-fetch" ]] || [[ -z "$previous_revision" ]] || ! git diff --quiet "$previous_revision" HEAD -- frontend; then
+  frontend_changed=true
+fi
 
-progress 2 5 "Installing backend dependencies"
-python3 -m venv backend/api/.venv
-backend/api/.venv/bin/pip install --quiet --upgrade pip
-backend/api/.venv/bin/pip install --quiet -r backend/api/requirements.txt
+if [[ "$backend_changed" == true || ! -x backend/api/.venv/bin/python ]]; then
+  progress 2 5 "Installing backend dependencies"
+  python3 -m venv backend/api/.venv
+  backend/api/.venv/bin/pip install --quiet --upgrade pip
+  backend/api/.venv/bin/pip install --quiet -r backend/api/requirements.txt
+else
+  progress 2 5 "Backend is already current"
+fi
 if [[ "$firmware_changed" == true && "${ESP32_AUTO_FLASH:-true}" == true ]]; then
   progress 3 5 "Building and uploading ESP32 firmware"
   backend/api/.venv/bin/pip install --quiet platformio
@@ -62,14 +78,20 @@ fi
 if [[ "$firmware_changed" != true || "${ESP32_AUTO_FLASH:-true}" != true ]]; then
   progress 3 5 "ESP32 firmware is already current"
 fi
-progress 4 5 "Building web interface"
-cd frontend/ui
-npm install --no-audit --no-fund
-npm run build
-cd "$INSTALL_DIR"
+if [[ "$frontend_changed" == true || ! -d frontend/ui/dist ]]; then
+  progress 4 5 "Building web interface"
+  cd frontend/ui
+  npm install --no-audit --no-fund
+  npm run build
+  cd "$INSTALL_DIR"
+else
+  progress 4 5 "Web interface is already current"
+fi
 install -d -o "$SERVICE_USER" -g "$SERVICE_USER" /var/lib/astrodrive/frontend
-rm -rf /var/lib/astrodrive/frontend/*
-cp -a frontend/ui/dist/. /var/lib/astrodrive/frontend/
+if [[ "$frontend_changed" == true || ! -f /var/lib/astrodrive/frontend/index.html ]]; then
+  rm -rf /var/lib/astrodrive/frontend/*
+  cp -a frontend/ui/dist/. /var/lib/astrodrive/frontend/
+fi
 chown -R "$SERVICE_USER":"$SERVICE_USER" "$INSTALL_DIR" /var/lib/astrodrive/frontend
 progress 5 5 "Restarting services"
 systemctl try-restart astrodrive-api.service || true
