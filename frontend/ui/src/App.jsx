@@ -19,6 +19,8 @@ const CAMERA_FIELDS = [
   { key: 'saturation', label: 'Saturation' },
   { key: 'auto_white_balance', label: 'Auto white balance', toggle: true },
   { key: 'white_balance_temperature', label: 'White balance K' },
+  { key: 'auto_focus', label: 'Auto focus', toggle: true },
+  { key: 'focus', label: 'Focus' },
 ];
 
 export default function App() {

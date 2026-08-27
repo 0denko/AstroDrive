@@ -11,8 +11,9 @@ if [[ ! -x "$streamer" || -z "$input_plugin" || -z "$output_plugin" ]]; then
   exit 1
 fi
 if [[ "$camera_device" == "auto" ]]; then
+  # a Pi exposes codec and ISP nodes under /dev/video* too, so pick the first that can capture
   for candidate in /dev/video*; do
-    if [[ -e "$candidate" ]]; then
+    if [[ -e "$candidate" ]] && v4l2-ctl --device "$candidate" --list-formats 2>/dev/null | grep -q '^\s*\[0\]'; then
       camera_device="$candidate"
       break
     fi

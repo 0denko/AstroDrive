@@ -115,7 +115,17 @@ def camera_device() -> str:
     configured = os.getenv("CAMERA_DEVICE", "auto")
     if configured != "auto":
         return configured
-    return next(iter(glob("/dev/video*")), "/dev/video0")
+    streamer = subprocess.run(["pgrep", "-a", "mjpg_streamer"], capture_output=True, text=True, check=False)
+    streaming = re.search(r"-d\s+(/dev/video\d+)", streamer.stdout)
+    if streaming:
+        # control the node that is actually streaming rather than whichever one glob returns first
+        return streaming.group(1)
+    # a Pi exposes codec and ISP nodes under /dev/video* too, so pick the first that can capture
+    for path in sorted(glob("/dev/video*"), key=lambda name: int(re.sub(r"\D", "", name) or 0)):
+        formats = subprocess.run(["v4l2-ctl", "--device", path, "--list-formats"], capture_output=True, text=True, check=False)
+        if formats.returncode == 0 and "[0]" in formats.stdout:
+            return path
+    return "/dev/video0"
 
 
 # "  exposure_time_absolute 0x009a0902 (int) : min=1 max=5000 step=1 default=157 value=157 flags=inactive"
@@ -130,9 +140,11 @@ CAMERA_CONTROL_ALIASES = {
     "saturation": ("saturation",),
     "auto_white_balance": ("white_balance_automatic", "white_balance_temperature_auto"),
     "white_balance_temperature": ("white_balance_temperature",),
+    "auto_focus": ("focus_automatic_continuous", "focus_auto"),
+    "focus": ("focus_absolute",),
 }
 # auto toggles come first: drivers mark the manual controls inactive while auto is engaged.
-CAMERA_CONTROL_ORDER = ("auto_exposure", "auto_white_balance", "exposure", "gain", "brightness", "contrast", "saturation", "white_balance_temperature")
+CAMERA_CONTROL_ORDER = ("auto_exposure", "auto_white_balance", "auto_focus", "exposure", "gain", "brightness", "contrast", "saturation", "white_balance_temperature", "focus")
 
 
 def read_camera_controls(device: str) -> tuple[dict[str, dict], str]:
@@ -184,7 +196,7 @@ def camera_control_values(controls: dict[str, dict]) -> dict:
         if field == "auto_exposure":
             # menu drivers use 1=manual and 3=auto, bool drivers use 0/1
             values[field] = value != 1 if entry["type"] == "menu" else bool(value)
-        elif field == "auto_white_balance":
+        elif field in ("auto_white_balance", "auto_focus"):
             values[field] = bool(value)
         else:
             values[field] = value
@@ -194,7 +206,7 @@ def camera_control_values(controls: dict[str, dict]) -> dict:
 def camera_control_argument(field: str, value, entry: dict) -> int:
     if field == "auto_exposure":
         return (3 if value else 1) if entry["type"] == "menu" else int(bool(value))
-    if field == "auto_white_balance":
+    if field in ("auto_white_balance", "auto_focus"):
         return int(bool(value))
     number = int(value)
     if entry["min"] is not None:
@@ -278,6 +290,8 @@ class CameraControls(BaseModel):
     white_balance_temperature: int | None = None
     auto_exposure: bool | None = None
     auto_white_balance: bool | None = None
+    auto_focus: bool | None = None
+    focus: int | None = None
 
 
 class StackRequest(BaseModel):
