@@ -10,7 +10,7 @@ curl -fsSL https://raw.githubusercontent.com/0denko/AstroDrive/main/deploy/insta
 
 To deploy a fork, pass its repository URL after the script: `... | sudo bash -s -- https://github.com/OWNER/REPO`.
 
-The installer installs Python, Node.js, Nginx, Git, and PlatformIO; clones the selected branch to `/opt/astrodrive`; creates the `astrodrive` service account; builds the API and UI; uploads changed ESP32 firmware when the board is connected, and enables the API plus Nginx at boot. It pauses the update timer during installation and uses a lock to prevent concurrent update runs. Its progress display stays at one consistent percentage sequence, including when it calls the updater internally.
+The installer installs Python, Node.js, Nginx, Git, and PlatformIO; clones the selected branch to `/opt/astrodrive`; creates the `astrodrive` service account; builds the API and UI; uploads changed ESP32 firmware when the board is connected, and enables the API plus Nginx at boot. It stops any active updater service and timer before installation, then restores the timer automatically. It also uses a lock to prevent concurrent update runs. Its progress display stays at one consistent percentage sequence, including when it calls the updater internally.
 
 Edit `/etc/astrodrive/astrodrive.env` for MQTT and camera settings, then run `sudo systemctl restart astrodrive-api`.
 

@@ -24,6 +24,9 @@ if systemctl is-active --quiet astrodrive-update.timer; then
   timer_was_active=true
   systemctl stop astrodrive-update.timer
 fi
+if systemctl is-active --quiet astrodrive-update.service; then
+  systemctl stop astrodrive-update.service
+fi
 restore_timer() {
   if [[ "$timer_was_active" == true ]]; then
     systemctl enable --now astrodrive-update.timer >/dev/null 2>&1 || true
