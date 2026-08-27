@@ -154,6 +154,11 @@ class UpdateResult(BaseModel):
     message: str
 
 
+class UpdateStatus(BaseModel):
+    state: Literal["idle", "running", "failed"]
+    detail: str
+
+
 def publish(payload: dict) -> None:
     delivered = False
     if mqtt_connected:
@@ -228,6 +233,20 @@ def trigger_update() -> UpdateResult:
     except OSError as error:
         raise HTTPException(status_code=503, detail="Could not start updater") from error
     return UpdateResult(started=True, message="Update started; refresh status in a moment")
+
+
+@app.get("/api/update/status", response_model=UpdateStatus)
+def update_status() -> UpdateStatus:
+    try:
+        state = subprocess.run(["systemctl", "is-active", "astrodrive-update.service"], capture_output=True, text=True, check=False).stdout.strip()
+        detail = subprocess.run(["journalctl", "-u", "astrodrive-update.service", "-n", "1", "-o", "cat", "--no-pager"], capture_output=True, text=True, check=False).stdout.strip()
+    except OSError as error:
+        return UpdateStatus(state="failed", detail=str(error))
+    if state == "active":
+        return UpdateStatus(state="running", detail=detail or "Update is in progress")
+    if state == "failed":
+        return UpdateStatus(state="failed", detail=detail or "Update failed")
+    return UpdateStatus(state="idle", detail=detail or "No update is running")
 
 
 @app.put("/api/settings/serial")
