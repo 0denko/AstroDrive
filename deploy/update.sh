@@ -9,6 +9,9 @@ SERVICE_USER="astrodrive"
 
 progress() {
   local current="$1" total="$2" label="$3" width=28 filled
+  if [[ "${ASTRODRIVE_NESTED:-false}" == true ]]; then
+    return
+  fi
   filled=$((current * width / total))
   printf "\n[%3d%%] [" $((current * 100 / total))
   printf "%*s" "$filled" "" | tr ' ' '#'

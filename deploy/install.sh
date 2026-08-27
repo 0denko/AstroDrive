@@ -49,7 +49,7 @@ sed -i "s|^ASTRODRIVE_REPO_URL=.*|ASTRODRIVE_REPO_URL=$REPO_URL|; s|^ASTRODRIVE_
 
 progress 6 8 "Building application and ESP32 firmware"
 chmod +x "$INSTALL_DIR/deploy/update.sh"
-bash "$INSTALL_DIR/deploy/update.sh" --skip-fetch
+ASTRODRIVE_NESTED=true bash "$INSTALL_DIR/deploy/update.sh" --skip-fetch
 progress 7 8 "Installing and starting services"
 install -m 0644 "$INSTALL_DIR/deploy/astrodrive-api.service" /etc/systemd/system/
 install -m 0644 "$INSTALL_DIR/deploy/astrodrive-update.service" /etc/systemd/system/
