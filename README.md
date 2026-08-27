@@ -15,6 +15,6 @@ A Raspberry Pi and ESP32 telescope mount controller.
 3. Install and run the API using `backend/README.md`.
 4. Install and build the UI using `frontend/README.md`.
 
-For the shortest Raspberry Pi path, follow `deploy/RASPBERRY_PI.md`: flash Ubuntu Server, SSH in, and run one installer command.
+For the shortest Raspberry Pi path, follow `deploy/RASPBERRY_PI.md`: flash Raspberry Pi OS Lite 64-bit, SSH in, and run one installer command.
 
 This is a control baseline. Verify motor driver wiring, current limits, travel limits, and an emergency stop before connecting a telescope.
