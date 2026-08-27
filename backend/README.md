@@ -16,4 +16,6 @@ The web UI sends commands to FastAPI. FastAPI forwards them over USB serial usin
 
 The installer starts `mjpg-streamer` for a USB webcam and the UI consumes it through `/camera/`, so phones and computers do not interpret `localhost` as their own machine. `CAMERA_DEVICE=auto` scans `/dev/video*`; set it to an exact path such as `/dev/video1` in `/etc/astrodrive/astrodrive.env` when multiple cameras are connected. Set `CAMERA_URL` if using another camera server.
 
+Camera controls are exposed at `/api/camera/controls`. Some webcams call exposure `exposure_time_absolute`, while others do not expose it at all; the UI reports the driver's response. Long exposure is implemented as an averaged stack of JPEG frames from the active stream, so it improves signal-to-noise but cannot replace a camera with a true long-shutter sensor.
+
 Endpoints include `GET /api/status`, `POST /api/command`, and `POST /api/target`.

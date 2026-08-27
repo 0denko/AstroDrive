@@ -39,6 +39,7 @@ progress 1 8 "Updating package lists"
 apt-get update
 progress 2 8 "Installing system dependencies"
 apt-get install -y git python3 python3-venv python3-pip nginx nodejs npm v4l-utils build-essential cmake libjpeg-dev
+apt-get install -y imagemagick python3-pil
 if ! command -v mjpg_streamer >/dev/null 2>&1; then
   git clone --depth 1 https://github.com/jacksonliam/mjpg-streamer.git /tmp/mjpg-streamer
   cmake -S /tmp/mjpg-streamer/mjpg-streamer-experimental -B /tmp/mjpg-streamer/build
@@ -49,6 +50,7 @@ fi
 progress 3 8 "Creating service account"
 id -u "$SERVICE_USER" >/dev/null 2>&1 || useradd --system --home "$INSTALL_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
 usermod -aG dialout "$SERVICE_USER"
+usermod -aG video "$SERVICE_USER"
 install -d -o "$SERVICE_USER" -g "$SERVICE_USER" "$INSTALL_DIR" /etc/astrodrive /var/lib/astrodrive /var/lib/astrodrive/frontend
 git config --global --add safe.directory "$INSTALL_DIR"
 
@@ -72,6 +74,7 @@ sed -i "s|^ASTRODRIVE_REPO_URL=.*|ASTRODRIVE_REPO_URL=$REPO_URL|; s|^ASTRODRIVE_
 progress 6 8 "Building application and ESP32 firmware"
 chmod +x "$INSTALL_DIR/deploy/update.sh"
 chmod +x "$INSTALL_DIR/deploy/start-camera.sh"
+chmod +x "$INSTALL_DIR/deploy/stack-camera.py"
 ASTRODRIVE_NESTED=true bash "$INSTALL_DIR/deploy/update.sh" --skip-fetch
 progress 7 8 "Installing and starting services"
 install -m 0644 "$INSTALL_DIR/deploy/astrodrive-api.service" /etc/systemd/system/

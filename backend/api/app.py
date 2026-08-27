@@ -2,6 +2,7 @@ import os
 import json
 import threading
 import subprocess
+from glob import glob
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -34,6 +35,8 @@ SERIAL_BAUD = int(os.getenv("ESP32_SERIAL_BAUD", "115200"))
 SERIAL_CONFIG_PATH = Path(os.getenv("ESP32_SERIAL_CONFIG", "/var/lib/astrodrive/serial-config.json"))
 MOUNT_CONFIG_PATH = Path(os.getenv("MOUNT_CONFIG", "/var/lib/astrodrive/mount-config.json"))
 CAMERA_URL = os.getenv("CAMERA_URL", "/camera/?action=stream")
+CAMERA_SNAPSHOT_URL = os.getenv("CAMERA_SNAPSHOT_URL", "http://127.0.0.1:8080/?action=snapshot")
+CAMERA_CAPTURE_PATH = Path(os.getenv("CAMERA_CAPTURE_PATH", "/var/lib/astrodrive/captures"))
 mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 mqtt_connected = False
 serial_connection = None
@@ -97,6 +100,13 @@ def connect_serial(port_name: str):
     return None
 
 
+def camera_device() -> str:
+    configured = os.getenv("CAMERA_DEVICE", "auto")
+    if configured != "auto":
+        return configured
+    return next(iter(glob("/dev/video*")), "/dev/video0")
+
+
 class Command(BaseModel):
     command: Literal["enable", "disable", "stop", "move"]
     axis: Literal["ra", "dec"] | None = None
@@ -157,6 +167,22 @@ class UpdateResult(BaseModel):
 class UpdateStatus(BaseModel):
     state: Literal["idle", "running", "failed"]
     detail: str
+
+
+class CameraControls(BaseModel):
+    exposure: int | None = Field(default=None, ge=-20, le=10000)
+    gain: int | None = Field(default=None, ge=0, le=10000)
+    brightness: int | None = Field(default=None, ge=-100, le=100)
+    contrast: int | None = Field(default=None, ge=0, le=100)
+    saturation: int | None = Field(default=None, ge=0, le=100)
+    white_balance_temperature: int | None = Field(default=None, ge=2000, le=10000)
+    auto_exposure: bool | None = None
+
+
+class StackRequest(BaseModel):
+    frames: int = Field(default=8, ge=2, le=60)
+    interval_ms: int = Field(default=250, ge=0, le=10000)
+    stretch: float = Field(default=2.0, ge=1, le=10)
 
 
 def publish(payload: dict) -> None:
@@ -247,6 +273,35 @@ def update_status() -> UpdateStatus:
     if state == "failed":
         return UpdateStatus(state="failed", detail=detail or "Update failed")
     return UpdateStatus(state="idle", detail=detail or "No update is running")
+
+
+@app.get("/api/camera/controls")
+def camera_controls() -> dict:
+    result = subprocess.run(["v4l2-ctl", "--device", camera_device(), "--list-ctrls-json"], capture_output=True, text=True, check=False)
+    return {"available": result.returncode == 0, "controls": json.loads(result.stdout) if result.returncode == 0 and result.stdout else {}, "error": result.stderr.strip()}
+
+
+@app.put("/api/camera/controls")
+def set_camera_controls(request: CameraControls) -> dict:
+    device = camera_device()
+    values = {"exposure_time_absolute": request.exposure, "gain": request.gain, "brightness": request.brightness, "contrast": request.contrast, "saturation": request.saturation, "white_balance_temperature": request.white_balance_temperature}
+    if request.auto_exposure is not None:
+        values["exposure_auto"] = 3 if request.auto_exposure else 1
+    commands = [f"{key}={value}" for key, value in values.items() if value is not None]
+    if not commands:
+        raise HTTPException(status_code=400, detail="Choose at least one camera control")
+    result = subprocess.run(["v4l2-ctl", "--device", device, "--set-ctrl", ",".join(commands)], capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise HTTPException(status_code=422, detail=result.stderr.strip() or "Camera does not support those controls")
+    return {"applied": values}
+
+
+@app.post("/api/camera/stack")
+def stack_camera(request: StackRequest) -> dict:
+    CAMERA_CAPTURE_PATH.mkdir(parents=True, exist_ok=True)
+    output = CAMERA_CAPTURE_PATH / "latest.jpg"
+    subprocess.Popen(["/usr/bin/python3", "/opt/astrodrive/deploy/stack-camera.py", str(output), CAMERA_SNAPSHOT_URL, str(request.frames), str(request.interval_ms), str(request.stretch)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    return {"started": True, "frames": request.frames, "image_url": "/captures/latest.jpg"}
 
 
 @app.put("/api/settings/serial")
