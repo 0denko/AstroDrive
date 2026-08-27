@@ -24,7 +24,11 @@ for index in range(1, frame_count + 1):
 mean = total / frame_count
 # most of a sky frame is background, so its median is the floor to remove before amplifying
 black = np.median(mean.reshape(-1, 3), axis=0)
-signal = np.clip(mean - black, 0.0, None) * gain
+# the stream is MJPEG and its 8x8 block structure repeats in every frame, so averaging never
+# removes it; clipping at the background spread stops the stretch from amplifying it into a mesh
+spread = np.median(np.abs(mean.reshape(-1, 3) - black), axis=0)
+floor = black + 2.0 * spread
+signal = np.clip(mean - floor, 0.0, None) * gain
 if gamma != 1.0:
     signal = 255.0 * np.power(np.clip(signal / 255.0, 0.0, 1.0), 1.0 / gamma)
 result = Image.fromarray(np.clip(signal, 0.0, 255.0).astype(np.uint8))
@@ -34,4 +38,4 @@ staging = destination.with_name(destination.name + ".partial")
 result.save(staging, format="JPEG", quality=92)
 # swap in one step so the web server never serves a half-written frame
 staging.replace(destination)
-print(f"{frame_count} frames | input mean {mean.mean():.1f} peak {mean.max():.0f} of 255 | black {black.mean():.1f} | gain {gain:g} gamma {gamma:g}")
+print(f"{frame_count} frames | input mean {mean.mean():.1f} peak {mean.max():.0f} of 255 | floor {floor.mean():.1f} | gain {gain:g} gamma {gamma:g}")

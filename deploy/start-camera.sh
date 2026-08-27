@@ -24,6 +24,13 @@ if [[ "$camera_device" == "auto" || ! -e "$camera_device" ]]; then
   exit 1
 fi
 
+input_options="-d $camera_device -r 640x480 -f 10"
+# the camera's own MJPEG quantises hard, and its 8x8 blocks survive stacking because every frame
+# blocks identically; -y captures YUYV and re-encodes here instead, at the cost of CPU
+if [[ -n "${CAMERA_QUALITY:-}" ]]; then
+  input_options="$input_options -y -q $CAMERA_QUALITY"
+fi
+
 exec "$streamer" \
-  -i "$input_plugin -d $camera_device -r 640x480 -f 10" \
+  -i "$input_plugin $input_options" \
   -o "$output_plugin -w /usr/share/mjpg-streamer/www -p 8080"
