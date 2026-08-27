@@ -20,6 +20,7 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 cd "$INSTALL_DIR"
+git config --global --add safe.directory "$INSTALL_DIR"
 
 progress 1 5 "Checking for source updates"
 previous_revision="$(git rev-parse HEAD 2>/dev/null || true)"

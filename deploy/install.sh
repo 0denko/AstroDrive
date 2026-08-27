@@ -28,6 +28,7 @@ progress 3 8 "Creating service account"
 id -u "$SERVICE_USER" >/dev/null 2>&1 || useradd --system --home "$INSTALL_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
 usermod -aG dialout "$SERVICE_USER"
 install -d -o "$SERVICE_USER" -g "$SERVICE_USER" "$INSTALL_DIR" /etc/astrodrive /var/lib/astrodrive /var/lib/astrodrive/frontend
+git config --global --add safe.directory "$INSTALL_DIR"
 
 progress 4 8 "Downloading AstroDrive source"
 if [[ ! -d "$INSTALL_DIR/.git" ]]; then
