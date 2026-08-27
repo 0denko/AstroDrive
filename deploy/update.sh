@@ -33,6 +33,14 @@ cd "$INSTALL_DIR"
 chmod +x "$INSTALL_DIR/deploy/start-camera.sh"
 git config --global --add safe.directory "$INSTALL_DIR"
 
+if ! command -v mjpg_streamer >/dev/null 2>&1; then
+  apt-get update -qq
+  apt-get install -y mjpg-streamer v4l-utils
+fi
+if [[ -f /etc/astrodrive/astrodrive.env ]]; then
+  sed -i 's|^CAMERA_URL=http://localhost:8080/|CAMERA_URL=/camera/?action=stream|' /etc/astrodrive/astrodrive.env
+fi
+
 progress 1 5 "Checking for source updates"
 previous_revision="$(git rev-parse HEAD 2>/dev/null || true)"
 if [[ "${1:-}" != "--skip-fetch" ]]; then
