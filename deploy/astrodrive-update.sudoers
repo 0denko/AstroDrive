@@ -1,1 +1,1 @@
-astrodrive ALL=(root) NOPASSWD: /usr/bin/systemctl start astrodrive-update.service
+astrodrive ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block astrodrive-update.service

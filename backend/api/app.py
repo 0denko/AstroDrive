@@ -255,9 +255,11 @@ def trigger_update() -> UpdateResult:
     if not Path(UPDATE_SCRIPT).exists():
         raise HTTPException(status_code=503, detail="Updater is not installed")
     try:
-        subprocess.Popen(["sudo", "-n", "systemctl", "start", "astrodrive-update.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        result = subprocess.run(["sudo", "-n", "systemctl", "start", "--no-block", "astrodrive-update.service"], capture_output=True, text=True, check=False)
     except OSError as error:
         raise HTTPException(status_code=503, detail="Could not start updater") from error
+    if result.returncode != 0:
+        raise HTTPException(status_code=503, detail=result.stderr.strip() or "Updater permission is not installed")
     return UpdateResult(started=True, message="Update started; refresh status in a moment")
 
 
