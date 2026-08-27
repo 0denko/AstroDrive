@@ -44,8 +44,18 @@ if [[ "$firmware_changed" == true && "${ESP32_AUTO_FLASH:-true}" == true ]]; the
   upload_args=()
   if [[ "${ESP32_SERIAL_PORT:-auto}" != "auto" ]]; then
     upload_args+=(--upload-port "$ESP32_SERIAL_PORT")
+  else
+    for candidate in /dev/ttyUSB* /dev/ttyACM*; do
+      if [[ -e "$candidate" ]]; then
+        upload_args+=(--upload-port "$candidate")
+        break
+      fi
+    done
   fi
-  if ! backend/api/.venv/bin/pio run -d esp32/firmware -t upload "${upload_args[@]}"; then
+  backend/api/.venv/bin/pio run -d esp32/firmware
+  if [[ ${#upload_args[@]} -eq 0 ]]; then
+    echo "ESP32 not connected; firmware was built but not uploaded."
+  elif ! backend/api/.venv/bin/pio run -d esp32/firmware -t upload "${upload_args[@]}"; then
     echo "ESP32 firmware upload was not completed; continuing with Pi services."
   fi
 fi
