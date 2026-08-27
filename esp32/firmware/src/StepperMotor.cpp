@@ -13,6 +13,15 @@ void StepperMotor::begin() {
   setEnabled(false);
 }
 
+void StepperMotor::configure(uint8_t stepPin, uint8_t directionPin,
+                             uint8_t enablePin, bool enableActiveLow) {
+  stepPin_ = stepPin;
+  directionPin_ = directionPin;
+  enablePin_ = enablePin;
+  enableActiveLow_ = enableActiveLow;
+  begin();
+}
+
 void StepperMotor::setEnabled(bool enabled) {
   enabled_ = enabled;
   digitalWrite(enablePin_, (enableActiveLow_ ? !enabled : enabled) ? HIGH : LOW);

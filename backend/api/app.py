@@ -40,6 +40,14 @@ mount_config = {
     "dec_steps_per_revolution": 3200,
     "ra_belt_ratio": 1.0,
     "dec_belt_ratio": 1.0,
+    "driver_type": "step_dir",
+    "ra_step_pin": 25,
+    "ra_dir_pin": 26,
+    "ra_enable_pin": 27,
+    "dec_step_pin": 14,
+    "dec_dir_pin": 12,
+    "dec_enable_pin": 13,
+    "enable_active_low": True,
     "latitude": 0.0,
     "longitude": 0.0,
     "elevation_m": 0.0,
@@ -106,6 +114,14 @@ class MountSettings(BaseModel):
     dec_steps_per_revolution: int = Field(ge=1, le=1000000)
     ra_belt_ratio: float = Field(gt=0, le=1000)
     dec_belt_ratio: float = Field(gt=0, le=1000)
+    driver_type: Literal["step_dir"] = "step_dir"
+    ra_step_pin: int = Field(ge=0, le=39)
+    ra_dir_pin: int = Field(ge=0, le=39)
+    ra_enable_pin: int = Field(ge=0, le=39)
+    dec_step_pin: int = Field(ge=0, le=39)
+    dec_dir_pin: int = Field(ge=0, le=39)
+    dec_enable_pin: int = Field(ge=0, le=39)
+    enable_active_low: bool = True
 
 
 class LocationSettings(BaseModel):
@@ -140,6 +156,8 @@ def publish(payload: dict) -> None:
             serial_command = command
         elif command == "move":
             serial_command = f"move {payload['axis']} {payload['direction']} {payload['steps']}"
+        elif command == "configure":
+            serial_command = "configure {ra_step_pin} {ra_dir_pin} {ra_enable_pin} {dec_step_pin} {dec_dir_pin} {dec_enable_pin} {enable_active_low}".format(**payload)
         else:
             serial_command = ""
         if serial_command:
@@ -183,7 +201,7 @@ def status() -> dict:
         "esp32_connected": serial_connection is not None,
         "serial_port": serial_port_name,
         "mount": "tracking" if mount_config["tracking"] else "aligned" if mount_config["alignment"]["state"] == "complete" else "not_aligned",
-        "mount_config": {key: mount_config[key] for key in ("ra_steps_per_revolution", "dec_steps_per_revolution", "ra_belt_ratio", "dec_belt_ratio")},
+        "mount_config": {key: mount_config[key] for key in ("ra_steps_per_revolution", "dec_steps_per_revolution", "ra_belt_ratio", "dec_belt_ratio", "driver_type", "ra_step_pin", "ra_dir_pin", "ra_enable_pin", "dec_step_pin", "dec_dir_pin", "dec_enable_pin", "enable_active_low")},
         "location": location,
         "alignment": mount_config["alignment"],
         "tracking": mount_config["tracking"],
@@ -210,6 +228,7 @@ def update_serial_settings(request: SerialSettings) -> dict:
 def update_mount_settings(request: MountSettings) -> dict:
     mount_config.update(request.model_dump())
     save_mount_config()
+    publish({"command": "configure", **request.model_dump()})
     return {"mount_config": request.model_dump()}
 
 

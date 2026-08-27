@@ -7,6 +7,8 @@ class StepperMotor {
   StepperMotor(uint8_t stepPin, uint8_t directionPin, uint8_t enablePin,
                bool enableActiveLow = true);
   void begin();
+  void configure(uint8_t stepPin, uint8_t directionPin, uint8_t enablePin,
+                 bool enableActiveLow);
   void setEnabled(bool enabled);
   void step(bool forward, uint32_t pulseMicros = 500);
   bool isEnabled() const;

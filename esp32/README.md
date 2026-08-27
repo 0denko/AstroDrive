@@ -14,4 +14,4 @@ Update the pin constants in `main.cpp` for your board. The default pins are RA s
 
 ## Serial protocol
 
-At `115200` baud over the USB cable to the Pi, send newline-delimited commands: `enable`, `disable`, `stop`, `status`, or `move ra forward 10` / `move dec backward 10`. Responses are compact JSON lines. Motion planning and limits should be added before closed-loop operation.
+At `115200` baud over the USB cable to the Pi, send newline-delimited commands: `enable`, `disable`, `stop`, `status`, `move ra forward 10` / `move dec backward 10`, or `configure 25 26 27 14 12 13 1`. Configuration is stored in ESP32 NVS flash and restored after reboot. Responses are compact JSON lines. Motion planning, encoders, and limits should be added before closed-loop operation.
