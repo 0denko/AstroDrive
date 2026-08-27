@@ -6,5 +6,5 @@ Before=astrodrive-api.service
 
 [Service]
 Type=oneshot
-ExecStart=/opt/astrodrive/deploy/update.sh
+ExecStart=/bin/bash /opt/astrodrive/deploy/update.sh
 User=root
