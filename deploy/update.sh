@@ -7,12 +7,21 @@ INSTALL_DIR="${ASTRODRIVE_INSTALL_DIR:-/opt/astrodrive}"
 BRANCH="${ASTRODRIVE_BRANCH:-main}"
 SERVICE_USER="astrodrive"
 
+progress() {
+  local current="$1" total="$2" label="$3" width=28 filled
+  filled=$((current * width / total))
+  printf "\n[%3d%%] [" $((current * 100 / total))
+  printf "%*s" "$filled" "" | tr ' ' '#'
+  printf "%*s] %s\n" $((width - filled)) "" "$label"
+}
+
 if [[ $EUID -ne 0 ]]; then
   echo "Run the updater as root."
   exit 1
 fi
 cd "$INSTALL_DIR"
 
+progress 1 5 "Checking for source updates"
 previous_revision="$(git rev-parse HEAD 2>/dev/null || true)"
 if [[ "${1:-}" != "--skip-fetch" ]]; then
   git fetch origin "$BRANCH"
@@ -24,10 +33,12 @@ if [[ "${1:-}" == "--skip-fetch" ]] || [[ -z "$previous_revision" ]] || ! git di
   firmware_changed=true
 fi
 
+progress 2 5 "Installing backend dependencies"
 python3 -m venv backend/api/.venv
 backend/api/.venv/bin/pip install --quiet --upgrade pip
 backend/api/.venv/bin/pip install --quiet -r backend/api/requirements.txt
 if [[ "$firmware_changed" == true && "${ESP32_AUTO_FLASH:-true}" == true ]]; then
+  progress 3 5 "Building and uploading ESP32 firmware"
   backend/api/.venv/bin/pip install --quiet platformio
   upload_args=()
   if [[ "${ESP32_SERIAL_PORT:-auto}" != "auto" ]]; then
@@ -37,6 +48,10 @@ if [[ "$firmware_changed" == true && "${ESP32_AUTO_FLASH:-true}" == true ]]; the
     echo "ESP32 firmware upload was not completed; continuing with Pi services."
   fi
 fi
+if [[ "$firmware_changed" != true || "${ESP32_AUTO_FLASH:-true}" != true ]]; then
+  progress 3 5 "ESP32 firmware is already current"
+fi
+progress 4 5 "Building web interface"
 cd frontend/ui
 npm install --no-audit --no-fund
 npm run build
@@ -45,5 +60,6 @@ install -d -o "$SERVICE_USER" -g "$SERVICE_USER" /var/lib/astrodrive/frontend
 rm -rf /var/lib/astrodrive/frontend/*
 cp -a frontend/ui/dist/. /var/lib/astrodrive/frontend/
 chown -R "$SERVICE_USER":"$SERVICE_USER" "$INSTALL_DIR" /var/lib/astrodrive/frontend
+progress 5 5 "Restarting services"
 systemctl try-restart astrodrive-api.service || true
 systemctl reload nginx || true
