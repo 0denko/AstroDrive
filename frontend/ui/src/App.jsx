@@ -1,48 +1,53 @@
 import { useEffect, useState } from 'react';
 
 const API = import.meta.env.VITE_API_URL || '';
+const initialMount = { ra_steps_per_revolution: 3200, dec_steps_per_revolution: 3200, ra_belt_ratio: 1, dec_belt_ratio: 1 };
+const initialLocation = { latitude: 0, longitude: 0, elevation_m: 0, location_source: 'manual' };
 
 export default function App() {
   const [status, setStatus] = useState(null);
   const [target, setTarget] = useState({ right_ascension: '5.5', declination: '22.0' });
   const [serialPort, setSerialPort] = useState('auto');
+  const [mount, setMount] = useState(initialMount);
+  const [location, setLocation] = useState(initialLocation);
+  const [point, setPoint] = useState({ name: 'Alignment star', right_ascension: '5.5', declination: '22.0' });
   const [message, setMessage] = useState('');
 
+  async function request(path, options = {}) {
+    const response = await fetch(`${API}${path}`, { headers: { 'Content-Type': 'application/json' }, ...options });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.detail || 'Request unavailable');
+    return body;
+  }
+
   async function refreshStatus() {
-    try { setStatus(await fetch(`${API}/api/status`).then((response) => response.json())); }
-    catch { setStatus({ connected: false, mount: 'offline' }); }
+    try { setStatus(await request('/api/status')); } catch { setStatus({ connected: false, esp32_connected: false, mount: 'offline' }); }
   }
 
-  async function sendCommand(payload) {
-    const response = await fetch(`${API}/api/command`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-    setMessage(response.ok ? 'Command accepted' : 'Command unavailable');
-    refreshStatus();
+  async function run(action, success) {
+    try { await action(); setMessage(success); refreshStatus(); } catch (error) { setMessage(error.message); }
   }
 
-  async function sendTarget(event) {
-    event.preventDefault();
-    const response = await fetch(`${API}/api/target`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ right_ascension: Number(target.right_ascension), declination: Number(target.declination) }) });
-    setMessage(response.ok ? 'Target queued' : 'Target unavailable');
-  }
-
-  async function saveSerialPort(event) {
-    event.preventDefault();
-    const response = await fetch(`${API}/api/settings/serial`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ port: serialPort }) });
-    const result = await response.json();
-    setMessage(response.ok ? (result.connected ? 'ESP32 connected' : 'Port saved; ESP32 not found') : 'Invalid serial port');
-    refreshStatus();
-  }
+  function sendCommand(payload) { return run(() => request('/api/command', { method: 'POST', body: JSON.stringify(payload) }), 'Command accepted'); }
+  function sendTarget(event) { event.preventDefault(); return run(() => request('/api/target', { method: 'POST', body: JSON.stringify({ right_ascension: Number(target.right_ascension), declination: Number(target.declination) }) }), 'Target queued'); }
+  function saveSerialPort(event) { event.preventDefault(); return run(async () => { const result = await request('/api/settings/serial', { method: 'PUT', body: JSON.stringify({ port: serialPort }) }); setMessage(result.connected ? 'ESP32 connected' : 'Port saved; ESP32 not found'); }, 'Port saved'); }
+  function saveSettings(event) { event.preventDefault(); return run(async () => { await request('/api/settings/mount', { method: 'PUT', body: JSON.stringify({ ...mount, ra_steps_per_revolution: Number(mount.ra_steps_per_revolution), dec_steps_per_revolution: Number(mount.dec_steps_per_revolution), ra_belt_ratio: Number(mount.ra_belt_ratio), dec_belt_ratio: Number(mount.dec_belt_ratio) }) }); await request('/api/settings/location', { method: 'PUT', body: JSON.stringify({ ...location, latitude: Number(location.latitude), longitude: Number(location.longitude), elevation_m: Number(location.elevation_m) }) }); }, 'Settings saved'); }
+  function alignmentAction(action) { return run(() => request('/api/alignment', { method: 'POST', body: JSON.stringify({ action }) }), action === 'complete' ? 'Alignment complete' : `Alignment ${action}`); }
+  function addPoint(event) { event.preventDefault(); return run(() => request('/api/alignment/point', { method: 'POST', body: JSON.stringify({ ...point, right_ascension: Number(point.right_ascension), declination: Number(point.declination) }) }), 'Alignment point recorded'); }
+  function toggleTracking() { return run(() => request('/api/tracking', { method: 'POST', body: JSON.stringify({ enabled: !status?.tracking }) }), status?.tracking ? 'Tracking stopped' : 'Tracking enabled'); }
 
   useEffect(() => { refreshStatus(); const timer = setInterval(refreshStatus, 5000); return () => clearInterval(timer); }, []);
-  useEffect(() => { if (status?.serial_port) setSerialPort(status.serial_port); }, [status?.serial_port]);
+  useEffect(() => { if (status?.serial_port) setSerialPort(status.serial_port); if (status?.mount_config) setMount(status.mount_config); if (status?.location) setLocation(status.location); }, [status]);
 
   return <main>
-    <header><div><span className="eyebrow">MOUNT CONTROL / LIVE</span><h1>AstroDrive</h1></div><span className={`connection ${status?.connected ? 'online' : ''}`}>{status?.connected ? 'MQTT ONLINE' : 'MQTT OFFLINE'}</span></header>
+    <header><div><span className="eyebrow">MOUNT CONTROL / LIVE</span><h1>AstroDrive</h1></div><div className="status-stack"><span className={`connection ${status?.esp32_connected ? 'online' : ''}`}>{status?.esp32_connected ? 'ESP32 ONLINE' : 'ESP32 OFFLINE'}</span><span className="mount-state">{status?.mount ?? 'checking'}</span></div></header>
     <section className="grid">
       <div className="panel camera"><div className="panel-heading"><span>Sky camera</span><span className="live-dot">● LIVE</span></div>{status?.camera_url ? <img src={status.camera_url} alt="Live sky camera" /> : <div className="empty">Waiting for camera stream</div>}</div>
-      <div className="panel controls"><div className="panel-heading"><span>Manual control</span><span className="mount-state">{status?.mount ?? 'checking'}</span></div><div className="dpad"><button onClick={() => sendCommand({ command: 'move', axis: 'dec', direction: 'forward', steps: 10 })}>DEC +</button><button onClick={() => sendCommand({ command: 'move', axis: 'ra', direction: 'backward', steps: 10 })}>RA −</button><button onClick={() => sendCommand({ command: 'stop' })}>STOP</button><button onClick={() => sendCommand({ command: 'move', axis: 'ra', direction: 'forward', steps: 10 })}>RA +</button><button onClick={() => sendCommand({ command: 'move', axis: 'dec', direction: 'backward', steps: 10 })}>DEC −</button></div><div className="actions"><button onClick={() => sendCommand({ command: 'enable' })}>Enable motors</button><button onClick={() => sendCommand({ command: 'disable' })}>Disable</button></div><form className="serial-form" onSubmit={saveSerialPort}><label>ESP32 serial port<input value={serialPort} placeholder="auto or /dev/ttyACM0" onChange={(event) => setSerialPort(event.target.value)} /></label><button className="primary" type="submit">Save and reconnect</button></form></div>
-      <form className="panel target" onSubmit={sendTarget}><div className="panel-heading"><span>Go-to target</span><span>J2000 / decimal hours</span></div><label>Right ascension<input type="number" min="0" max="23.999" step="0.001" value={target.right_ascension} onChange={(event) => setTarget({ ...target, right_ascension: event.target.value })} /></label><label>Declination<input type="number" min="-90" max="90" step="0.001" value={target.declination} onChange={(event) => setTarget({ ...target, declination: event.target.value })} /></label><button className="primary" type="submit">Slew to target ↗</button></form>
-    </section>
-    <footer><span>{message || 'System ready'}</span><span>{status?.timestamp ? new Date(status.timestamp).toLocaleTimeString() : 'No telemetry'}</span></footer>
-  </main>;
-}
+      <div className="panel controls"><div className="panel-heading"><span>Manual control</span><span>{status?.serial_port ?? 'auto'}</span></div><div className="dpad"><button onClick={() => sendCommand({ command: 'move', axis: 'dec', direction: 'forward', steps: 10 })}>DEC +</button><button onClick={() => sendCommand({ command: 'move', axis: 'ra', direction: 'backward', steps: 10 })}>RA −</button><button onClick={() => sendCommand({ command: 'stop' })}>STOP</button><button onClick={() => sendCommand({ command: 'move', axis: 'ra', direction: 'forward', steps: 10 })}>RA +</button><button onClick={() => sendCommand({ command: 'move', axis: 'dec', direction: 'backward', steps: 10 })}>DEC −</button></div><div className="actions"><button onClick={() => sendCommand({ command: 'enable' })}>Enable motors</button><button onClick={() => sendCommand({ command: 'disable' })}>Disable</button></div><form onSubmit={saveSerialPort}><label>ESP32 serial port<input value={serialPort} placeholder="auto or /dev/ttyACM0" onChange={(event) => setSerialPort(event.target.value)} /></label><button className="primary" type="submit">Save and reconnect</button></form></div>
+      <form className="panel target" onSubmit={sendTarget}><div className="panel-heading"><span>Go-to target</span><span>{status?.alignment?.state === 'complete' ? 'READY' : 'ALIGN FIRST'}</span></div><label>Right ascension<input type="number" min="0" max="23.999" step="0.001" value={target.right_ascension} onChange={(event) => setTarget({ ...target, right_ascension: event.target.value })} /></label><label>Declination<input type="number" min="-90" max="90" step="0.001" value={target.declination} onChange={(event) => setTarget({ ...target, declination: event.target.value })} /></label><button className="primary" type="submit" disabled={status?.alignment?.state !== 'complete'}>Slew to target ↗</button></form>
+      <form className="panel settings" onSubmit={saveSettings}><div className="panel-heading"><span>Mount + site</span><span>{location.location_source}</span></div><div className="fields"><label>RA steps/rev<input type="number" value={mount.ra_steps_per_revolution} onChange={(event) => setMount({ ...mount, ra_steps_per_revolution: event.target.value })} /></label><label>DEC steps/rev<input type="number" value={mount.dec_steps_per_revolution} onChange={(event) => setMount({ ...mount, dec_steps_per_revolution: event.target.value })} /></label><label>RA belt ratio<input type="number" step="0.001" value={mount.ra_belt_ratio} onChange={(event) => setMount({ ...mount, ra_belt_ratio: event.target.value })} /></label><label>DEC belt ratio<input type="number" step="0.001" value={mount.dec_belt_ratio} onChange={(event) => setMount({ ...mount, dec_belt_ratio: event.target.value })} /></label><label>Latitude<input type="number" step="0.0001" value={location.latitude} onChange={(event) => setLocation({ ...location, latitude: event.target.value })} /></label><label>Longitude<input type="number" step="0.0001" value={location.longitude} onChange={(event) => setLocation({ ...location, longitude: event.target.value })} /></label><label>Elevation (m)<input type="number" value={location.elevation_m} onChange={(event) => setLocation({ ...location, elevation_m: event.target.value })} /></label><label>Location source<select value={location.location_source} onChange={(event) => setLocation({ ...location, location_source: event.target.value })}><option value="manual">Manual</option><option value="gps">GPS</option></select></label></div><button className="primary" type="submit">Save configuration</button></form>
+      <div className="panel alignment"><div className="panel-heading"><span>Alignment</span><span>{status?.alignment?.state ?? 'not_started'} / {status?.alignment?.points?.length ?? 0} points</span></div><div className="actions"><button onClick={() => alignmentAction('start')}>Start</button><button onClick={() => alignmentAction('complete')} disabled={!status?.alignment?.points?.length}>Complete</button><button onClick={() => alignmentAction('reset')}>Reset</button><button onClick={toggleTracking} disabled={status?.alignment?.state !== 'complete'}>{status?.tracking ? 'Stop tracking' : 'Start tracking'}</button></div><form onSubmit={addPoint}><label>Known star / target name<input value={point.name} onChange={(event) => setPoint({ ...point, name: event.target.value })} /></label><div className="fields"><label>RA<input type="number" step="0.001" value={point.right_ascension} onChange={(event) => setPoint({ ...point, right_ascension: event.target.value })} /></label><label>DEC<input type="number" step="0.001" value={point.declination} onChange={(event) => setPoint({ ...point, declination: event.target.value })} /></label></div><button className="primary" type="submit" disabled={status?.alignment?.state !== 'collecting'}>Record alignment point</button></form></div>
++    </section>
++    <footer><span>{message || 'System ready'}</span><span>{status?.timestamp ? new Date(status.timestamp).toLocaleTimeString() : 'No telemetry'}</span></footer>
++  </main>;
++}
