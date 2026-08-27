@@ -7,9 +7,11 @@ from typing import Literal
 
 import paho.mqtt.client as mqtt
 import serial
+import requests
 from astropy.coordinates import AltAz, EarthLocation, SkyCoord
 from astropy.time import Time
 import astropy.units as u
+from skyfield.api import EarthSatellite, load, wgs84
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -296,3 +298,34 @@ def target(request: Target) -> dict:
     target_data = {"command": "goto", **request.model_dump(), "altitude": float(apparent.alt.deg), "azimuth": float(apparent.az.deg), "timestamp": now.isot}
     publish(target_data)
     return {"accepted": True, "target": target_data}
+
+
+@app.get("/api/objects/resolve")
+def resolve_object(name: str) -> dict:
+    try:
+        coordinate = SkyCoord.from_name(name)
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=f"Could not resolve astronomical object: {error}") from error
+    return {"name": name, "right_ascension": round(coordinate.ra.hour, 6), "declination": round(coordinate.dec.deg, 6), "frame": coordinate.frame.name}
+
+
+@app.get("/api/objects/satellites")
+def satellites(limit: int = 20) -> dict:
+    try:
+        response = requests.get("https://celestrak.org/NORAD/elements/gp.php?GROUP=visual&FORMAT=tle", timeout=10)
+        response.raise_for_status()
+    except requests.RequestException as error:
+        raise HTTPException(status_code=502, detail="Satellite data source unavailable") from error
+    lines = [line.strip() for line in response.text.splitlines() if line.strip()]
+    objects = []
+    timescale = load.timescale()
+    observer = wgs84.latlon(mount_config["latitude"], mount_config["longitude"], elevation_m=mount_config["elevation_m"])
+    observation_time = timescale.now()
+    for index in range(0, len(lines) - 2, 3):
+        if lines[index + 1].startswith("1 ") and lines[index + 2].startswith("2 "):
+            satellite = EarthSatellite(lines[index + 1], lines[index + 2], lines[index], timescale)
+            altitude, azimuth, distance = (satellite - observer).at(observation_time).altaz()
+            objects.append({"name": lines[index], "tle": [lines[index + 1], lines[index + 2]], "altitude": round(altitude.degrees, 2), "azimuth": round(azimuth.degrees, 2), "distance_km": round(distance.km, 1)})
+        if len(objects) >= max(1, min(limit, 100)):
+            break
+    return {"source": "CelesTrak visual group", "objects": objects}
