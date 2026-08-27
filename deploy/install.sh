@@ -35,7 +35,7 @@ export DEBIAN_FRONTEND=noninteractive
 progress 1 8 "Updating package lists"
 apt-get update
 progress 2 8 "Installing system dependencies"
-apt-get install -y git python3 python3-venv python3-pip nginx nodejs npm
+apt-get install -y git python3 python3-venv python3-pip nginx nodejs npm mjpg-streamer v4l-utils
 progress 3 8 "Creating service account"
 id -u "$SERVICE_USER" >/dev/null 2>&1 || useradd --system --home "$INSTALL_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
 usermod -aG dialout "$SERVICE_USER"
@@ -61,11 +61,13 @@ sed -i "s|^ASTRODRIVE_REPO_URL=.*|ASTRODRIVE_REPO_URL=$REPO_URL|; s|^ASTRODRIVE_
 
 progress 6 8 "Building application and ESP32 firmware"
 chmod +x "$INSTALL_DIR/deploy/update.sh"
+chmod +x "$INSTALL_DIR/deploy/start-camera.sh"
 ASTRODRIVE_NESTED=true bash "$INSTALL_DIR/deploy/update.sh" --skip-fetch
 progress 7 8 "Installing and starting services"
 install -m 0644 "$INSTALL_DIR/deploy/astrodrive-api.service" /etc/systemd/system/
 install -m 0644 "$INSTALL_DIR/deploy/astrodrive-update.service" /etc/systemd/system/
 install -m 0644 "$INSTALL_DIR/deploy/astrodrive-update.timer" /etc/systemd/system/
+install -m 0644 "$INSTALL_DIR/deploy/astrodrive-camera.service" /etc/systemd/system/
 install -m 0440 "$INSTALL_DIR/deploy/astrodrive-update.sudoers" /etc/sudoers.d/astrodrive-update
 install -m 0644 "$INSTALL_DIR/deploy/astrodrive.nginx" /etc/nginx/sites-available/astrodrive
 ln -sfn /etc/nginx/sites-available/astrodrive /etc/nginx/sites-enabled/astrodrive
@@ -74,6 +76,7 @@ nginx -t
 visudo -cf /etc/sudoers.d/astrodrive-update
 systemctl daemon-reload
 systemctl enable astrodrive-update.service
+systemctl enable --now astrodrive-camera.service
 systemctl enable --now astrodrive-api.service
 systemctl enable --now astrodrive-update.timer
 systemctl reload nginx || systemctl restart nginx

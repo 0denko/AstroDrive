@@ -1,0 +1,13 @@
+[Unit]
+Description=AstroDrive USB webcam stream
+After=dev-video0.device
+Wants=dev-video0.device
+
+[Service]
+Type=simple
+ExecStart=/bin/bash /opt/astrodrive/deploy/start-camera.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

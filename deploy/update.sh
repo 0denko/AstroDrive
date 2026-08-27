@@ -30,6 +30,7 @@ if ! flock -n 9; then
   exit 0
 fi
 cd "$INSTALL_DIR"
+chmod +x "$INSTALL_DIR/deploy/start-camera.sh"
 git config --global --add safe.directory "$INSTALL_DIR"
 
 progress 1 5 "Checking for source updates"
@@ -43,13 +44,14 @@ fi
 install -m 0644 "$INSTALL_DIR/deploy/astrodrive-api.service" /etc/systemd/system/
 install -m 0644 "$INSTALL_DIR/deploy/astrodrive-update.service" /etc/systemd/system/
 install -m 0644 "$INSTALL_DIR/deploy/astrodrive-update.timer" /etc/systemd/system/
+install -m 0644 "$INSTALL_DIR/deploy/astrodrive-camera.service" /etc/systemd/system/
 if command -v nginx >/dev/null 2>&1; then
   install -m 0644 "$INSTALL_DIR/deploy/astrodrive.nginx" /etc/nginx/sites-available/astrodrive
   ln -sfn /etc/nginx/sites-available/astrodrive /etc/nginx/sites-enabled/astrodrive
   rm -f /etc/nginx/sites-enabled/default
 fi
 systemctl daemon-reload
-systemctl enable astrodrive-api.service astrodrive-update.service astrodrive-update.timer >/dev/null
+systemctl enable astrodrive-api.service astrodrive-camera.service astrodrive-update.service astrodrive-update.timer >/dev/null
 firmware_changed=false
 if [[ "${1:-}" == "--skip-fetch" ]] || [[ -z "$previous_revision" ]] || ! git diff --quiet "$previous_revision" HEAD -- esp32; then
   firmware_changed=true
@@ -122,6 +124,7 @@ fi
 chown -R "$SERVICE_USER":"$SERVICE_USER" "$INSTALL_DIR" /var/lib/astrodrive/frontend
 progress 5 5 "Restarting services"
 systemctl try-restart astrodrive-api.service || true
+systemctl try-restart astrodrive-camera.service || true
 if command -v nginx >/dev/null 2>&1 && [[ "${ASTRODRIVE_NESTED:-false}" != true ]]; then
   nginx -t && systemctl reload nginx || true
 fi

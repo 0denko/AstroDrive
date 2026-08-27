@@ -33,7 +33,7 @@ SERIAL_PORT = os.getenv("ESP32_SERIAL_PORT", "auto")
 SERIAL_BAUD = int(os.getenv("ESP32_SERIAL_BAUD", "115200"))
 SERIAL_CONFIG_PATH = Path(os.getenv("ESP32_SERIAL_CONFIG", "/var/lib/astrodrive/serial-config.json"))
 MOUNT_CONFIG_PATH = Path(os.getenv("MOUNT_CONFIG", "/var/lib/astrodrive/mount-config.json"))
-CAMERA_URL = os.getenv("CAMERA_URL", "http://localhost:8080/?action=stream")
+CAMERA_URL = os.getenv("CAMERA_URL", "/camera/?action=stream")
 mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 mqtt_connected = False
 serial_connection = None
