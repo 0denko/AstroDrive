@@ -131,8 +131,8 @@ if [[ "$frontend_changed" == true || ! -f /var/lib/astrodrive/frontend/index.htm
 fi
 chown -R "$SERVICE_USER":"$SERVICE_USER" "$INSTALL_DIR" /var/lib/astrodrive/frontend
 progress 5 5 "Restarting services"
-systemctl try-restart astrodrive-api.service || true
-systemctl try-restart astrodrive-camera.service || true
+systemctl try-restart --no-block astrodrive-api.service || true
+systemctl try-restart --no-block astrodrive-camera.service || true
 if command -v nginx >/dev/null 2>&1 && [[ "${ASTRODRIVE_NESTED:-false}" != true ]]; then
   nginx -t && systemctl reload nginx || true
 fi
