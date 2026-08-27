@@ -8,3 +8,6 @@ Before=astrodrive-api.service
 Type=oneshot
 ExecStart=/bin/bash /opt/astrodrive/deploy/update.sh
 User=root
+
+[Install]
+WantedBy=multi-user.target
