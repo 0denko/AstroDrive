@@ -39,7 +39,7 @@ progress 1 8 "Updating package lists"
 apt-get update
 progress 2 8 "Installing system dependencies"
 apt-get install -y git python3 python3-venv python3-pip nginx nodejs npm v4l-utils build-essential cmake libjpeg-dev
-apt-get install -y imagemagick python3-pil
+apt-get install -y imagemagick python3-pil python3-numpy
 if ! command -v mjpg_streamer >/dev/null 2>&1; then
   git clone --depth 1 https://github.com/jacksonliam/mjpg-streamer.git /tmp/mjpg-streamer
   cmake -S /tmp/mjpg-streamer/mjpg-streamer-experimental -B /tmp/mjpg-streamer/build

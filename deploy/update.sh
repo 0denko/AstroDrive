@@ -32,7 +32,7 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y git python3 python3-venv python3-pip nginx nodejs npm v4l-utils build-essential cmake libjpeg-dev
-apt-get install -y imagemagick python3-pil
+apt-get install -y imagemagick python3-pil python3-numpy
 id -u "$SERVICE_USER" >/dev/null 2>&1 || useradd --system --home "$INSTALL_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
 usermod -aG dialout "$SERVICE_USER"
 usermod -aG video "$SERVICE_USER"

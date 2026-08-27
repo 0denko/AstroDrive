@@ -5,22 +5,33 @@ import time
 from pathlib import Path
 from urllib.request import urlopen
 
-from PIL import Image, ImageEnhance
+import numpy as np
+from PIL import Image
 
-output, snapshot_url, frame_count, interval_ms, stretch = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), float(sys.argv[5])
-result = None
+output, snapshot_url = sys.argv[1], sys.argv[2]
+frame_count, interval_ms = int(sys.argv[3]), int(sys.argv[4])
+gain, gamma = float(sys.argv[5]), float(sys.argv[6])
+
+total = None
 for index in range(1, frame_count + 1):
     with urlopen(snapshot_url, timeout=10) as response:
-        frame = Image.open(io.BytesIO(response.read())).convert("RGB")
-    # running mean, so only two frames are ever held in memory
-    result = frame if result is None else Image.blend(result, frame, 1.0 / index)
+        frame = np.asarray(Image.open(io.BytesIO(response.read())).convert("RGB"), dtype=np.float32)
+    # an 8-bit running mean rounds away the sub-step detail that stacking exists to recover
+    total = frame if total is None else total + frame
     if index < frame_count:
         time.sleep(interval_ms / 1000)
 
-if stretch != 1.0:
-    result = ImageEnhance.Brightness(result).enhance(stretch)
+mean = total / frame_count
+# most of a sky frame is background, so its median is the floor to remove before amplifying
+black = np.median(mean.reshape(-1, 3), axis=0)
+signal = np.clip(mean - black, 0.0, None) * gain
+if gamma != 1.0:
+    signal = 255.0 * np.power(np.clip(signal / 255.0, 0.0, 1.0), 1.0 / gamma)
+result = Image.fromarray(np.clip(signal, 0.0, 255.0).astype(np.uint8))
+
 destination = Path(output)
 staging = destination.with_name(destination.name + ".partial")
 result.save(staging, format="JPEG", quality=92)
 # swap in one step so the web server never serves a half-written frame
 staging.replace(destination)
+print(f"{frame_count} frames | input mean {mean.mean():.1f} peak {mean.max():.0f} of 255 | black {black.mean():.1f} | gain {gain:g} gamma {gamma:g}")

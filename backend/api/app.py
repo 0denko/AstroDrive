@@ -283,7 +283,9 @@ class CameraControls(BaseModel):
 class StackRequest(BaseModel):
     frames: int = Field(default=8, ge=2, le=60)
     interval_ms: int = Field(default=250, ge=0, le=10000)
-    stretch: float = Field(default=2.0, ge=1, le=10)
+    # averaging frames removes noise but never brightens, so the gain carries the whole exposure lift
+    stretch: float = Field(default=4.0, ge=1, le=64)
+    gamma: float = Field(default=2.2, ge=1, le=5)
 
 
 class StackStatus(BaseModel):
@@ -481,7 +483,7 @@ def stack_camera(request: StackRequest) -> StackStatus:
         log = STACK_LOG_PATH.open("w")
         try:
             stack_process = subprocess.Popen(
-                ["/usr/bin/python3", "/opt/astrodrive/deploy/stack-camera.py", str(STACK_OUTPUT_PATH), CAMERA_SNAPSHOT_URL, str(request.frames), str(request.interval_ms), str(request.stretch)],
+                ["/usr/bin/python3", "/opt/astrodrive/deploy/stack-camera.py", str(STACK_OUTPUT_PATH), CAMERA_SNAPSHOT_URL, str(request.frames), str(request.interval_ms), str(request.stretch), str(request.gamma)],
                 stdout=log,
                 stderr=log,
                 start_new_session=True,
@@ -508,9 +510,11 @@ def stack_status() -> StackStatus:
     if not STACK_OUTPUT_PATH.exists():
         return StackStatus(state="idle", detail="No stacked frame captured yet")
     modified = STACK_OUTPUT_PATH.stat().st_mtime
+    summary = STACK_LOG_PATH.read_text(errors="replace").strip().splitlines() if STACK_LOG_PATH.exists() else []
     return StackStatus(
         state="complete",
-        detail="Stacked frame ready",
+        # the stacker reports the input signal level, which explains a frame that stays dark
+        detail=summary[-1] if summary else "Stacked frame ready",
         frames=frames,
         image_url=f"/captures/latest.jpg?t={int(modified)}",
         completed_at=datetime.fromtimestamp(modified, timezone.utc).isoformat(),
