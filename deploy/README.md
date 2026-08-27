@@ -18,6 +18,14 @@ Edit `/etc/astrodrive/astrodrive.env` for MQTT and camera settings, then run `su
 
 ## Cloud-init
 
-Edit `cloud-init.yaml` with the real repository URL and provide it as user-data when creating an Ubuntu server. The server will install and deploy automatically on first boot.
+`cloud-init.yaml` is already configured for the public `0denko/AstroDrive` repository. For a cloud provider, paste its contents into the instance's **user-data** field. The server will install and deploy automatically on first boot.
+
+For an Ubuntu Raspberry Pi image, create a NoCloud seed image before booting the SD card:
+
+```bash
+cloud-localds seed.img deploy/cloud-init.yaml deploy/no-cloud/meta-data
+```
+
+Mount or attach `seed.img` as the cloud-init seed device according to the image instructions. Copy `deploy/no-cloud/network-config.example` to `network-config` and add it to the `cloud-localds` command if the Pi needs a static network configuration. Cloud-init will run the installer once, then the AstroDrive update service will check GitHub on every boot and every 15 minutes.
 
 For private repositories, use a deploy key or a short-lived credential configured by your provisioning system; do not put a token in a public cloud-init file or shell history.

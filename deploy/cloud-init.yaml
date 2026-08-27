@@ -4,4 +4,4 @@ packages:
   - curl
 
 runcmd:
-  - [ bash, -lc, "curl -fsSL https://raw.githubusercontent.com/REPLACE_ME/AstroDrive/main/deploy/install.sh | bash -s -- https://github.com/REPLACE_ME/AstroDrive.git" ]
+  - [ bash, -lc, "curl -fsSL https://raw.githubusercontent.com/0denko/AstroDrive/main/deploy/install.sh | bash -s -- https://github.com/0denko/AstroDrive" ]
