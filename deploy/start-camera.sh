@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-input_plugin="$(find /usr -name input_uvc.so -type f -print -quit)"
-output_plugin="$(find /usr -name output_http.so -type f -print -quit)"
+streamer="$(command -v mjpg_streamer || true)"
+streamer="${streamer:-$(find /opt/mjpg-streamer -type f -name mjpg_streamer -executable -print -quit)}"
+input_plugin="$(find /usr /opt -name input_uvc.so -type f -print -quit)"
+output_plugin="$(find /usr /opt -name output_http.so -type f -print -quit)"
 camera_device="${CAMERA_DEVICE:-auto}"
-if [[ -z "$input_plugin" || -z "$output_plugin" ]]; then
+if [[ ! -x "$streamer" || -z "$input_plugin" || -z "$output_plugin" ]]; then
   echo "mjpg-streamer plugins were not found"
   exit 1
 fi
@@ -21,6 +23,6 @@ if [[ "$camera_device" == "auto" || ! -e "$camera_device" ]]; then
   exit 1
 fi
 
-exec /usr/bin/mjpg_streamer \
+exec "$streamer" \
   -i "$input_plugin -d $camera_device -r 640x480 -f 10" \
   -o "$output_plugin -w /usr/share/mjpg-streamer/www -p 8080"

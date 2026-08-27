@@ -38,7 +38,14 @@ export DEBIAN_FRONTEND=noninteractive
 progress 1 8 "Updating package lists"
 apt-get update
 progress 2 8 "Installing system dependencies"
-apt-get install -y git python3 python3-venv python3-pip nginx nodejs npm mjpg-streamer v4l-utils
+apt-get install -y git python3 python3-venv python3-pip nginx nodejs npm v4l-utils build-essential cmake libjpeg-dev
+if ! command -v mjpg_streamer >/dev/null 2>&1; then
+  git clone --depth 1 https://github.com/jacksonliam/mjpg-streamer.git /tmp/mjpg-streamer
+  cmake -S /tmp/mjpg-streamer/mjpg-streamer-experimental -B /tmp/mjpg-streamer/build
+  cmake --build /tmp/mjpg-streamer/build -j2
+  cmake --install /tmp/mjpg-streamer/build --prefix /opt/mjpg-streamer
+  rm -rf /tmp/mjpg-streamer
+fi
 progress 3 8 "Creating service account"
 id -u "$SERVICE_USER" >/dev/null 2>&1 || useradd --system --home "$INSTALL_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
 usermod -aG dialout "$SERVICE_USER"
