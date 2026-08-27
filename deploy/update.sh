@@ -6,6 +6,7 @@ ENV_FILE="/etc/astrodrive/astrodrive.env"
 INSTALL_DIR="${ASTRODRIVE_INSTALL_DIR:-/opt/astrodrive}"
 BRANCH="${ASTRODRIVE_BRANCH:-main}"
 SERVICE_USER="astrodrive"
+FIRMWARE_MARKER="/var/lib/astrodrive/firmware-revision"
 
 progress() {
   local current="$1" total="$2" label="$3" width=28 filled
@@ -49,11 +50,6 @@ if command -v nginx >/dev/null 2>&1; then
 fi
 systemctl daemon-reload
 systemctl enable astrodrive-api.service astrodrive-update.service astrodrive-update.timer >/dev/null
-if [[ "${1:-}" != "--skip-fetch" && "$previous_revision" == "$(git rev-parse HEAD)" ]]; then
-  echo "AstroDrive is already up to date; deployment registration is current."
-  exit 0
-fi
-
 firmware_changed=false
 if [[ "${1:-}" == "--skip-fetch" ]] || [[ -z "$previous_revision" ]] || ! git diff --quiet "$previous_revision" HEAD -- esp32; then
   firmware_changed=true
@@ -66,6 +62,14 @@ frontend_changed=false
 if [[ "${1:-}" == "--skip-fetch" ]] || [[ -z "$previous_revision" ]] || ! git diff --quiet "$previous_revision" HEAD -- frontend; then
   frontend_changed=true
 fi
+firmware_upload_needed=false
+if [[ "${ESP32_AUTO_FLASH:-true}" == true && "$(cat "$FIRMWARE_MARKER" 2>/dev/null || true)" != "$(git rev-parse HEAD)" ]]; then
+  firmware_upload_needed=true
+fi
+if [[ "${1:-}" != "--skip-fetch" && "$previous_revision" == "$(git rev-parse HEAD)" && "$firmware_upload_needed" != true && "$backend_changed" != true && "$frontend_changed" != true ]]; then
+  echo "AstroDrive is already up to date; deployment registration is current."
+  exit 0
+fi
 
 if [[ "$backend_changed" == true || ! -x backend/api/.venv/bin/python ]]; then
   progress 2 5 "Installing backend dependencies"
@@ -75,7 +79,7 @@ if [[ "$backend_changed" == true || ! -x backend/api/.venv/bin/python ]]; then
 else
   progress 2 5 "Backend is already current"
 fi
-if [[ "$firmware_changed" == true && "${ESP32_AUTO_FLASH:-true}" == true ]]; then
+if [[ ("$firmware_changed" == true || "$firmware_upload_needed" == true) && "${ESP32_AUTO_FLASH:-true}" == true ]]; then
   progress 3 5 "Building and uploading ESP32 firmware"
   backend/api/.venv/bin/pip install --quiet platformio
   upload_args=()
@@ -94,9 +98,11 @@ if [[ "$firmware_changed" == true && "${ESP32_AUTO_FLASH:-true}" == true ]]; the
     echo "ESP32 not connected; firmware was built but not uploaded."
   elif ! backend/api/.venv/bin/pio run -d esp32/firmware -t upload "${upload_args[@]}"; then
     echo "ESP32 firmware upload was not completed; continuing with Pi services."
+  else
+    printf '%s\n' "$(git rev-parse HEAD)" > "$FIRMWARE_MARKER"
   fi
 fi
-if [[ "$firmware_changed" != true || "${ESP32_AUTO_FLASH:-true}" != true ]]; then
+if [[ "$firmware_changed" != true && "$firmware_upload_needed" != true || "${ESP32_AUTO_FLASH:-true}" != true ]]; then
   progress 3 5 "ESP32 firmware is already current"
 fi
 if [[ "$frontend_changed" == true || ! -d frontend/ui/dist ]]; then

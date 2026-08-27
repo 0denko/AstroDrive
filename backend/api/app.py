@@ -1,6 +1,7 @@
 import os
 import json
 import threading
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -23,6 +24,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+UPDATE_SCRIPT = "/opt/astrodrive/deploy/update.sh"
 
 MQTT_HOST = os.getenv("MQTT_HOST", "localhost")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
@@ -147,6 +149,11 @@ class TrackingRequest(BaseModel):
     enabled: bool
 
 
+class UpdateResult(BaseModel):
+    started: bool
+    message: str
+
+
 def publish(payload: dict) -> None:
     delivered = False
     if mqtt_connected:
@@ -210,6 +217,17 @@ def status() -> dict:
         "camera_url": CAMERA_URL,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@app.post("/api/update", response_model=UpdateResult)
+def trigger_update() -> UpdateResult:
+    if not Path(UPDATE_SCRIPT).exists():
+        raise HTTPException(status_code=503, detail="Updater is not installed")
+    try:
+        subprocess.Popen(["sudo", "-n", "systemctl", "start", "astrodrive-update.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError as error:
+        raise HTTPException(status_code=503, detail="Could not start updater") from error
+    return UpdateResult(started=True, message="Update started; refresh status in a moment")
 
 
 @app.put("/api/settings/serial")

@@ -66,10 +66,12 @@ progress 7 8 "Installing and starting services"
 install -m 0644 "$INSTALL_DIR/deploy/astrodrive-api.service" /etc/systemd/system/
 install -m 0644 "$INSTALL_DIR/deploy/astrodrive-update.service" /etc/systemd/system/
 install -m 0644 "$INSTALL_DIR/deploy/astrodrive-update.timer" /etc/systemd/system/
+install -m 0440 "$INSTALL_DIR/deploy/astrodrive-update.sudoers" /etc/sudoers.d/astrodrive-update
 install -m 0644 "$INSTALL_DIR/deploy/astrodrive.nginx" /etc/nginx/sites-available/astrodrive
 ln -sfn /etc/nginx/sites-available/astrodrive /etc/nginx/sites-enabled/astrodrive
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
+visudo -cf /etc/sudoers.d/astrodrive-update
 systemctl daemon-reload
 systemctl enable astrodrive-update.service
 systemctl enable --now astrodrive-api.service
