@@ -2,9 +2,7 @@
 
 StepperMotor::StepperMotor(uint8_t stepPin, uint8_t directionPin,
                            uint8_t enablePin, bool enableActiveLow)
-    : stepPin_(stepPin),
-      directionPin_(directionPin),
-      enablePin_(enablePin),
+    : stepPin_(stepPin), directionPin_(directionPin), enablePin_(enablePin),
       enableActiveLow_(enableActiveLow) {}
 
 void StepperMotor::begin() {
@@ -17,8 +15,7 @@ void StepperMotor::begin() {
 
 void StepperMotor::setEnabled(bool enabled) {
   enabled_ = enabled;
-  const bool active = enableActiveLow_ ? !enabled : enabled;
-  digitalWrite(enablePin_, active ? HIGH : LOW);
+  digitalWrite(enablePin_, (enableActiveLow_ ? !enabled : enabled) ? HIGH : LOW);
 }
 
 void StepperMotor::step(bool forward, uint32_t pulseMicros) {

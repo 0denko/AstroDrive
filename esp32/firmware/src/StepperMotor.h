@@ -6,7 +6,6 @@ class StepperMotor {
  public:
   StepperMotor(uint8_t stepPin, uint8_t directionPin, uint8_t enablePin,
                bool enableActiveLow = true);
-
   void begin();
   void setEnabled(bool enabled);
   void step(bool forward, uint32_t pulseMicros = 500);
