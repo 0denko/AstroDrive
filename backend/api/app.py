@@ -443,6 +443,9 @@ def update_status() -> UpdateStatus:
         return UpdateStatus(state="running", detail=stage or last_line or "Update is in progress", progress=progress, invocation_id=invocation_id)
     if active_state == "failed" or properties.get("Result", "success") not in ("success", ""):
         return UpdateStatus(state="failed", detail=last_line or "Update failed", progress=progress, invocation_id=invocation_id)
+    # a finished run ends on whatever the last stage happened to print, which is not a status
+    if progress == 100:
+        return UpdateStatus(state="idle", detail="Update finished", progress=progress, invocation_id=invocation_id)
     return UpdateStatus(state="idle", detail=last_line or "No update is running", progress=progress, invocation_id=invocation_id)
 
 

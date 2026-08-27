@@ -153,5 +153,11 @@ progress 5 5 "Restarting services"
 systemctl try-restart --no-block astrodrive-api.service || true
 systemctl try-restart --no-block astrodrive-camera.service || true
 if command -v nginx >/dev/null 2>&1 && [[ "${ASTRODRIVE_NESTED:-false}" != true ]]; then
-  nginx -t && systemctl reload nginx || true
+  # nginx -t is chatty on success, and that output would become the status line the UI shows
+  if nginx -t >/dev/null 2>&1; then
+    systemctl reload nginx || true
+  else
+    nginx -t || true
+  fi
 fi
+echo "Update finished"
