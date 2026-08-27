@@ -4,7 +4,9 @@ The firmware targets Arduino-compatible ESP32 boards and step/dir motor drivers.
 
 ## Flash
 
-Open `esp32/firmware` in Arduino IDE or PlatformIO, select the ESP32 board and serial port, then upload. Add `libraries/StepperMotor.cpp` and `libraries/StepperMotor.h` to the sketch if using Arduino IDE.
+The Pi installer uses PlatformIO to compile and upload firmware when the `esp32/` directory changes. The default board is `esp32dev`; change `board` in `platformio.ini` for a different ESP32 board. A USB development board with automatic reset/bootloader support can flash unattended. Bare modules may require holding BOOT during the first upload.
+
+For manual development, open `esp32/firmware` in Arduino IDE or PlatformIO, select the ESP32 board and serial port, then upload.
 
 ## Wiring
 
