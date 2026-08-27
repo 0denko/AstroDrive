@@ -45,9 +45,11 @@ CAMERA_CAPTURE_PATH = Path(os.getenv("CAMERA_CAPTURE_PATH", "/var/lib/astrodrive
 STACK_OUTPUT_PATH = CAMERA_CAPTURE_PATH / "latest.jpg"
 # nginx serves the captures directory, so the stacker log lives outside it
 STACK_LOG_PATH = Path(tempfile.gettempdir()) / "astrodrive-stack.log"
+# a continuous run would grow an appended log without bound, so progress is rewritten in place
+STACK_STATUS_PATH = Path(tempfile.gettempdir()) / "astrodrive-stack.status"
 stack_lock = threading.Lock()
 stack_process: subprocess.Popen | None = None
-stack_frames = {"count": 0}
+stack_frames = {"count": 0, "stopped": False}
 mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 mqtt_connected = False
 serial_connection = None
@@ -295,10 +297,12 @@ class CameraControls(BaseModel):
 
 
 class StackRequest(BaseModel):
-    frames: int = Field(default=8, ge=2, le=60)
+    # 0 keeps stacking until it is stopped, republishing the preview after every frame
+    frames: int = Field(default=8, ge=0, le=600)
     interval_ms: int = Field(default=250, ge=0, le=10000)
-    # averaging frames removes noise but never brightens, so the gain carries the whole exposure lift
-    stretch: float = Field(default=4.0, ge=1, le=64)
+    # averaging frames removes noise but never brightens, so the gain carries the whole exposure
+    # lift; 0 derives it from the frame instead, which a hand-picked number rarely gets right
+    stretch: float = Field(default=0.0, ge=0, le=64)
     gamma: float = Field(default=2.2, ge=1, le=5)
 
 
@@ -498,9 +502,10 @@ def stack_camera(request: StackRequest) -> StackStatus:
         if stack_process is not None and stack_process.poll() is None:
             raise HTTPException(status_code=409, detail="A stack capture is already running")
         log = STACK_LOG_PATH.open("w")
+        STACK_STATUS_PATH.write_text("Waiting for the first frame")
         try:
             stack_process = subprocess.Popen(
-                ["/usr/bin/python3", "/opt/astrodrive/deploy/stack-camera.py", str(STACK_OUTPUT_PATH), CAMERA_SNAPSHOT_URL, str(request.frames), str(request.interval_ms), str(request.stretch), str(request.gamma)],
+                ["/usr/bin/python3", "/opt/astrodrive/deploy/stack-camera.py", str(STACK_OUTPUT_PATH), CAMERA_SNAPSHOT_URL, str(request.frames), str(request.interval_ms), str(request.stretch), str(request.gamma), str(STACK_STATUS_PATH)],
                 stdout=log,
                 stderr=log,
                 start_new_session=True,
@@ -510,7 +515,27 @@ def stack_camera(request: StackRequest) -> StackStatus:
         finally:
             log.close()
         stack_frames["count"] = request.frames
-    return StackStatus(state="running", detail=f"Stacking {request.frames} frames", frames=request.frames)
+        stack_frames["stopped"] = False
+    detail = "Stacking until stopped" if request.frames == 0 else f"Stacking {request.frames} frames"
+    return StackStatus(state="running", detail=detail, frames=request.frames)
+
+
+@app.post("/api/camera/stack/stop", response_model=StackStatus)
+def stack_stop() -> StackStatus:
+    with stack_lock:
+        process = stack_process
+        stack_frames["stopped"] = True
+        if process is not None and process.poll() is None:
+            # the frames already averaged stay on disk, so stopping keeps the preview it has built
+            process.terminate()
+        # an API restart during a live stack drops the handle while the stacker keeps running
+        elif subprocess.run(["pkill", "-f", "stack-camera.py"], check=False).returncode != 0:
+            raise HTTPException(status_code=409, detail="No stack capture is running")
+    return stack_status()
+
+
+def stack_progress() -> str:
+    return STACK_STATUS_PATH.read_text(errors="replace").strip() if STACK_STATUS_PATH.exists() else ""
 
 
 @app.get("/api/camera/stack", response_model=StackStatus)
@@ -518,20 +543,27 @@ def stack_status() -> StackStatus:
     with stack_lock:
         process = stack_process
         frames = stack_frames["count"]
+        stopped = stack_frames["stopped"]
     code = process.poll() if process is not None else None
+    live = STACK_OUTPUT_PATH.exists()
+    modified = STACK_OUTPUT_PATH.stat().st_mtime if live else 0
     if process is not None and code is None:
-        return StackStatus(state="running", detail=f"Stacking {frames} frames", frames=frames)
-    if process is not None and code != 0:
+        return StackStatus(
+            state="running",
+            detail=stack_progress() or f"Stacking {frames} frames",
+            frames=frames,
+            # the stacker republishes after every frame, so the preview is watchable while it runs
+            image_url=f"/captures/latest.jpg?t={int(modified)}" if live else "",
+        )
+    if process is not None and code != 0 and not stopped:
         log = STACK_LOG_PATH.read_text(errors="replace").strip().splitlines() if STACK_LOG_PATH.exists() else []
         return StackStatus(state="failed", detail=log[-1] if log else f"Stacker exited with code {code}", frames=frames)
-    if not STACK_OUTPUT_PATH.exists():
+    if not live:
         return StackStatus(state="idle", detail="No stacked frame captured yet")
-    modified = STACK_OUTPUT_PATH.stat().st_mtime
-    summary = STACK_LOG_PATH.read_text(errors="replace").strip().splitlines() if STACK_LOG_PATH.exists() else []
     return StackStatus(
         state="complete",
         # the stacker reports the input signal level, which explains a frame that stays dark
-        detail=summary[-1] if summary else "Stacked frame ready",
+        detail=stack_progress() or "Stacked frame ready",
         frames=frames,
         image_url=f"/captures/latest.jpg?t={int(modified)}",
         completed_at=datetime.fromtimestamp(modified, timezone.utc).isoformat(),
