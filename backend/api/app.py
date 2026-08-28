@@ -457,6 +457,82 @@ class StackStatus(BaseModel):
 
 # the sky comes back round in a sidereal day of 86164.0905 s, not a solar one
 SIDEREAL_DEGREES_PER_SECOND = 360.0 / 86164.0905
+# name, RA in hours, declination in degrees, V magnitude. Pulled from SIMBAD sim-tap rather than
+# typed from memory, and kept local so choosing an alignment star needs no network.
+BRIGHT_STARS = (
+    ("Sirius", 6.752477, -16.716116, -1.46),
+    ("Canopus", 6.399197, -52.695661, -0.74),
+    ("Arcturus", 14.26102, 19.182409, -0.05),
+    ("Vega", 18.615649, 38.783689, 0.03),
+    ("Capella", 5.278155, 45.997991, 0.08),
+    ("Rigel", 5.242298, -8.201638, 0.13),
+    ("Procyon", 7.655033, 5.224988, 0.37),
+    ("Betelgeuse", 5.919529, 7.407064, 0.42),
+    ("Achernar", 1.628568, -57.236753, 0.46),
+    ("Hadar", 14.063724, -60.373035, 0.58),
+    ("Altair", 19.846388, 8.868321, 0.76),
+    ("Aldebaran", 4.598678, 16.509302, 0.86),
+    ("Antares", 16.490128, -26.432003, 0.91),
+    ("Spica", 13.419883, -11.161319, 0.97),
+    ("Pollux", 7.755264, 28.026199, 1.14),
+    ("Fomalhaut", 22.960846, -29.622237, 1.16),
+    ("Deneb", 20.690532, 45.280339, 1.25),
+    ("Mimosa", 12.795352, -59.688772, 1.25),
+    ("Regulus", 10.139531, 11.967209, 1.4),
+    ("Adhara", 6.977097, -28.972086, 1.5),
+    ("Castor", 7.576631, 31.888282, 1.58),
+    ("Shaula", 17.560144, -37.103824, 1.63),
+    ("Bellatrix", 5.418851, 6.349703, 1.64),
+    ("Elnath", 5.438198, 28.607452, 1.65),
+    ("Miaplacidus", 9.219994, -69.717208, 1.69),
+    ("Alnilam", 5.603559, -1.201919, 1.69),
+    ("Alnair", 22.137218, -46.960974, 1.71),
+    ("Alnitak", 5.679313, -1.942574, 1.77),
+    ("Dubhe", 11.062131, 61.751035, 1.79),
+    ("Mirfak", 3.405381, 49.861179, 1.79),
+    ("Kaus Australis", 18.402866, -34.384616, 1.81),
+    ("Wezen", 7.139857, -26.3932, 1.84),
+    ("Avior", 8.375232, -59.509484, 1.86),
+    ("Alkaid", 13.792344, 49.313267, 1.86),
+    ("Atria", 16.811082, -69.027712, 1.88),
+    ("Menkalinan", 5.992145, 44.947433, 1.9),
+    ("Peacock", 20.42746, -56.73509, 1.918),
+    ("Alhena", 6.628531, 16.39928, 1.92),
+    ("Mirzam", 6.378329, -17.955919, 1.97),
+    ("Alphard", 9.45979, -8.6586, 1.97),
+    ("Diphda", 0.726492, -17.986606, 2.01),
+    ("Hamal", 2.119557, 23.462418, 2.01),
+    ("Polaris", 2.530304, 89.264109, 2.02),
+    ("Menkent", 14.111374, -36.369955, 2.05),
+    ("Alpheratz", 0.139794, 29.090431, 2.06),
+    ("Nunki", 18.921091, -26.296724, 2.067),
+    ("Rasalhague", 17.582242, 12.560037, 2.07),
+    ("Kochab", 14.84509, 74.155504, 2.08),
+    ("Almach", 2.064987, 42.329728, 2.1),
+    ("Tiaki", 22.711125, -46.884576, 2.11),
+    ("Algol", 3.136148, 40.955647, 2.12),
+    ("Denebola", 11.817661, 14.572058, 2.13),
+    ("Suhail", 9.133266, -43.432591, 2.21),
+    ("Eltanin", 17.943436, 51.488896, 2.23),
+    ("Schedar", 0.675123, 56.537329, 2.23),
+    ("Sadr", 20.370473, 40.256679, 2.23),
+    ("Alphecca", 15.57813, 26.714685, 2.24),
+    ("Naos", 8.059735, -40.003148, 2.25),
+    ("Aspidiske", 9.284835, -59.275232, 2.26),
+    ("Caph", 0.152968, 59.149781, 2.27),
+    ("Merak", 11.030689, 56.382434, 2.37),
+    ("Ankaa", 0.43807, -42.305987, 2.38),
+    ("Enif", 21.736432, 9.875009, 2.39),
+    ("Mintaka", 5.533444, -0.299095, 2.41),
+    ("Sabik", 17.172969, -15.724907, 2.42),
+    ("Scheat", 23.062905, 28.082787, 2.42),
+    ("Phecda", 11.89718, 53.69476, 2.44),
+    ("Aludra", 7.401584, -29.303106, 2.45),
+    ("Izar", 14.749783, 27.074222, 2.45),
+    ("Markeb", 9.36856, -55.010667, 2.473),
+    ("Markab", 23.079348, 15.205267, 2.48),
+)
+COMPASS = ("N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW")
 # alt-az rates drift slowly, so recomputing them this often is far finer than the mount can follow
 TRACKING_TICK_SECONDS = 10.0
 # a Go-To has to finish before tracking may touch the axes again, or it would cancel the move
@@ -488,6 +564,10 @@ def sky_to_axes(right_ascension: float, declination: float, when: Time) -> tuple
 def shortest_turn(degrees: float) -> float:
     """Take the short way round, so a 350 degree slew becomes a 10 degree one the other way."""
     return (degrees + 180.0) % 360.0 - 180.0
+
+
+def compass_point(azimuth: float) -> str:
+    return COMPASS[int(azimuth % 360.0 / 22.5 + 0.5) % 16]
 
 
 def axis_steps_per_degree(axis: str) -> float:
@@ -923,6 +1003,37 @@ def add_alignment_point(request: AlignmentPoint) -> dict:
     mount_config["alignment"]["points"].append(point)
     save_mount_config()
     return point
+
+
+@app.get("/api/alignment/suggestions")
+def alignment_suggestions(limit: int = 8) -> dict:
+    limit = max(1, min(limit, 30))
+    now = Time.now()
+    catalogue = SkyCoord(
+        ra=[star[1] * 15.0 for star in BRIGHT_STARS] * u.deg,
+        dec=[star[2] for star in BRIGHT_STARS] * u.deg,
+    )
+    # one vectorised transform rather than 71, which matters on a Pi
+    local = catalogue.transform_to(AltAz(obstime=now, location=observer_location()))
+    stars = []
+    for (name, ra_hours, dec_deg, magnitude), alt, az in zip(BRIGHT_STARS, local.alt.deg, local.az.deg):
+        altitude = float(alt)
+        if altitude < 15.0:
+            continue
+        stars.append({
+            "name": name,
+            "right_ascension": ra_hours,
+            "declination": dec_deg,
+            "magnitude": magnitude,
+            "altitude": round(altitude, 2),
+            "azimuth": round(float(az), 2),
+            "compass": compass_point(float(az)),
+            # a star around 45 degrees is clear of the horizon haze without being an awkward
+            # near-vertical target, and a brighter one is easier to centre
+            "score": round(abs(altitude - 45.0) / 10.0 + magnitude, 3),
+        })
+    stars.sort(key=lambda star: star["score"])
+    return {"observed_at": now.isot, "stars": stars[:limit]}
 
 
 @app.post("/api/tracking")
