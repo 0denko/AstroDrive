@@ -864,11 +864,16 @@ def read_serial_log(after: int = 0) -> dict:
 
 @app.post("/api/serial/command")
 def send_serial_command(request: SerialCommand) -> dict:
+    global tracking_hold_until
     refresh_serial()
     with serial_log_lock:
         start = serial_log_seq
     if not write_serial(request.command):
         raise HTTPException(status_code=503, detail="No serial device is open")
+    parts = request.command.split()
+    if len(parts) == 4 and parts[0] == "move" and parts[3].isdigit():
+        # the console is where slews get tested, so hold tracking off there too
+        tracking_hold_until = time.monotonic() + int(parts[3]) / 500.0 + 2.0
     deadline = time.monotonic() + request.wait_seconds
     while time.monotonic() < deadline:
         with serial_log_lock:
@@ -938,7 +943,13 @@ def tracking(request: TrackingRequest) -> dict:
 
 @app.post("/api/command")
 def command(request: Command) -> dict:
-    publish(request.model_dump(exclude_none=True))
+    global tracking_hold_until
+    payload = request.model_dump(exclude_none=True)
+    publish(payload)
+    if request.command == "move":
+        # a nudge puts the axis in position mode, so tracking has to keep its hands off until the
+        # move lands or the next tick would cancel it half way
+        tracking_hold_until = time.monotonic() + request.steps / 500.0 + 2.0
     return {"accepted": True, "command": request.command}
 
 
