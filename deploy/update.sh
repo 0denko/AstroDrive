@@ -121,6 +121,8 @@ if [[ ("$firmware_changed" == true || "$firmware_upload_needed" == true) && "${E
   else
     # esptool needs the port to itself, and the API holds it open for the whole of its uptime
     systemctl stop astrodrive-api.service || true
+    # the API is the only remote control there is, so it has to come back even if this step dies
+    trap 'systemctl start astrodrive-api.service || true' EXIT
     upload_args=()
     if [[ "${ESP32_SERIAL_PORT:-auto}" != "auto" ]]; then
       upload_args+=(--upload-port "$ESP32_SERIAL_PORT")
@@ -136,11 +138,12 @@ if [[ ("$firmware_changed" == true || "$firmware_upload_needed" == true) && "${E
     fi
     if [[ ${#upload_args[@]} -eq 0 ]]; then
       echo "ESP32 not connected; firmware was built but not uploaded."
-    elif backend/api/.venv/bin/pio run -d esp32/firmware -e "$board_env" -t upload "${upload_args[@]}"; then
+    elif timeout 240 backend/api/.venv/bin/pio run -d esp32/firmware -e "$board_env" -t upload "${upload_args[@]}"; then
       printf '%s\n' "$firmware_stamp" > "$FIRMWARE_MARKER"
     else
       echo "ESP32 firmware upload was not completed; continuing with Pi services."
     fi
+    trap - EXIT
     systemctl start astrodrive-api.service || true
   fi
 fi
