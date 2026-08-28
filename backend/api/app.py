@@ -122,17 +122,29 @@ def log_serial(direction: str, text: str) -> None:
         })
 
 
+def open_serial(port: str):
+    connection = serial.Serial()
+    connection.port = port
+    connection.baudrate = SERIAL_BAUD
+    connection.timeout = 1
+    # the auto-reset circuit on a NodeMCU hangs off DTR/RTS: asserting them reboots the board and
+    # can strand it in the ROM bootloader, which never answers at the sketch baud
+    connection.dtr = False
+    connection.rts = False
+    connection.open()
+    return connection
+
+
 def connect_serial(port_name: str):
-    candidates = [port_name] if port_name != "auto" else [
-        "/dev/ttyUSB0",
-        "/dev/ttyACM0",
-        "/dev/ttyUSB1",
-        "/dev/ttyACM1",
-    ]
+    if port_name != "auto":
+        candidates = [port_name]
+    else:
+        # a re-enumerating adapter can land on any number, so a fixed list of four misses it
+        candidates = sorted(glob("/dev/ttyUSB*") + glob("/dev/ttyACM*"))
     for port in candidates:
         try:
-            return serial.Serial(port, SERIAL_BAUD, timeout=1)
-        except (serial.SerialException, FileNotFoundError):
+            return open_serial(port)
+        except (serial.SerialException, FileNotFoundError, OSError):
             continue
     return None
 
@@ -142,20 +154,26 @@ def refresh_serial() -> None:
     the link down until a restart. Status polls re-probe instead."""
     global serial_connection, serial_probed_at
     with serial_lock:
+        now = time.monotonic()
         if serial_connection is not None:
             # an unplugged adapter leaves the handle open but the device node disappears
             if Path(serial_connection.port).exists():
                 return
+            lost = serial_connection.port
             try:
                 serial_connection.close()
             except OSError:
                 pass
             serial_connection = None
-        now = time.monotonic()
+            log_serial("link", f"{lost} disappeared")
+            # it reappears under a different name, so waiting out the throttle only shows NO DEVICE
+            serial_probed_at = now - SERIAL_PROBE_INTERVAL
         if now - serial_probed_at < SERIAL_PROBE_INTERVAL:
             return
         serial_probed_at = now
         serial_connection = connect_serial(serial_port_name)
+        if serial_connection is not None:
+            log_serial("link", f"opened {serial_connection.port}")
 
 
 def serial_reader() -> None:
