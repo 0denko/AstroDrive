@@ -174,8 +174,17 @@ Two things are easy to get wrong:
 landing one position off puts 12 V onto `M1B`.
 
 `EN` is active low: pulled to GND the outputs are on, at `VIO` they are off. That matches the
-`enable_active_low` default of `true`, and it means the motors are released whenever the ESP32 is
-in reset or unpowered.
+`enable_active_low` default of `true`. It does not on its own mean the motors are released while the
+MCU is in reset, though: an unconfigured GPIO is an input, so the line floats at whatever the module
+leaves it at. Fit a 10 kΩ pull-up from `EN` to `VIO` so the coils stay off until firmware has run,
+and buzz your own module out rather than assuming it has one.
+
+**Tying `EN` straight to `GND`** is a legitimate shortcut, and it frees a GPIO per axis, which
+matters on an ESP8266. The cost is that the coils are energised the moment `VM` and `VIO` come up,
+the Enable and Disable buttons stop doing anything, and there is no line left to pull high for an
+emergency release. A motor that feels stiff with no firmware running is this, not a working driver.
+If you want the pin back but keep the release, tie both `EN` lines to one GPIO instead: five signals
+rather than six, and a single command still frees both axes.
 
 **Microstepping.** Tie both `MS1` and `MS2` to `VIO` for 1/16 stealthChop. Both pins have
 pull-downs, so leaving them floating gives 1/8 instead and every move lands at half the commanded
@@ -274,19 +283,26 @@ Useful for a dew heater, camera power, or killing the motor rail from software. 
 Relay boards are active low as often as not. Confirm which way yours goes before wiring anything
 that matters, so a reboot does not switch the dew heater on unattended.
 
-## Spare NodeMCU
+## NodeMCU as the controller
 
-The Amica NodeMCU is an ESP8266 and has no role in the current design: the firmware in this repo
-builds for `esp32dev` and talks to the Pi over USB serial. Note that ESP32 dev boards are commonly
-sold as "ESP32 NodeMCU" as well, and the board in the diagrams above is that ESP32, not this one.
-The ESP8266 could not host this pinout regardless, since GPIO25, 26 and 27 do not exist on it.
+The Amica NodeMCU is an ESP8266, and since the firmware gained a `nodemcuv2` environment it can host
+the mount instead of the ESP32. Note that ESP32 dev boards are commonly sold as "ESP32 NodeMCU" as
+well, and the board in the diagrams above is that ESP32, not this one. The GPIO numbering differs,
+so the defaults differ: RA `5/4/16` and DEC `14/12/13`, which is D1/D2/D0 and D5/D6/D7 on the
+silkscreen. The UI fields take the GPIO number, never the `D` label.
+
+Pins are the binding constraint. Exclude GPIO6-11 for the SPI flash and GPIO1/3 for the USB console,
+then leave alone the pins that must hold a level at reset — D8/GPIO15 low, D3/GPIO0 and D4/GPIO2
+high — and what remains is D0, D1, D2, D5, D6 and D7. Exactly six signals with nothing spare.
+Grounding both `EN` lines, or tying them to a single GPIO, buys back the headroom.
+
+GPIO16/D0 is the odd one out: it lives in the RTC domain, toggles more slowly than the others, and
+has a pull-down where the rest have pull-ups. Use it for `ENABLE` rather than `STEP`, and pull it up
+to `VIO` externally, or an active-low `EN` sitting there energises the coils at power-up.
 
 There is a wireless path if you want one. The API publishes every mount command as JSON to the MQTT
 topic `telescope/mount/command`, alongside the serial write, so a NodeMCU subscribed to that topic
-could drive the drivers over Wi-Fi instead. That firmware does not exist yet; the ESP8266 also has
-fewer usable GPIOs and several that must be at a particular level at boot, so the ESP32 is the
-better host for six motor signals. Keep the NodeMCU for a separate sensor node reporting
-temperature or dew point.
+could drive the drivers over Wi-Fi instead. That firmware does not exist yet.
 
 ## Before the first power-up
 
@@ -294,6 +310,9 @@ temperature or dew point.
 2. Confirm all grounds are common.
 3. Set `Vref` on both drivers with the motors disconnected and `VM` applied.
 4. Tie `MS1` and `MS2` to `VIO` on both drivers.
-5. Check GPIO12 is not pulled high, then confirm the ESP32 boots and answers `status`.
-6. Test each axis off the telescope, with `enable` then a short `move`, and confirm direction.
-7. Only then mount the motors.
+5. Check the strapping pins for your board are free: GPIO12 on an ESP32, D8/GPIO15 held low and
+   D3/GPIO0 and D4/GPIO2 held high on a NodeMCU. Then confirm the board boots and answers `status`.
+6. Confirm `EN` idles high, so the motors are free before firmware runs, unless you have
+   deliberately grounded it.
+7. Test each axis off the telescope, with `enable` then a short `move`, and confirm direction.
+8. Only then mount the motors.
