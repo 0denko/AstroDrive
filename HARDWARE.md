@@ -139,6 +139,37 @@ free pin instead. GPIO13, 14, 25, 26 and 27 have no such restriction.
 
 ## TMC2208 configuration
 
+### Module pinout
+
+The boards are FYSETC TMC2208 V1.0, 8 pins per side straddling the current trimmer:
+
+| Left side | Right side |
+| --- | --- |
+| `GND` | `DIR` |
+| `VIO` | `STEP` |
+| `M2B` | `CLK` |
+| `M2A` | `PDN` |
+| `M1A` | `NC` |
+| `M1B` | `MS2` |
+| `GND` | `MS1` |
+| `VM` | `EN` |
+
+Read that top to bottom with the silkscreen upright. Vendor wiring diagrams for this module are
+often drawn rotated 180°, which puts `VM` at the top and reverses both columns, so match pins by
+name and never by position on the header.
+
+Two things are easy to get wrong:
+
+- **There are two `GND` pins**, one beside `VIO` at the logic end and one beside `VM` at the power
+  end. They are the same net, but use the power-end one for the supply return and the logic-end one
+  for the ESP32 ground so the motor current does not share a path with the signal ground.
+- **The coil pairs are `M2B`+`M2A` and `M1A`+`M1B`.** In that physical order the middle two pins are
+  `M2A` and `M1A`, which sit next to each other and are both "A" but belong to *different* coils.
+  Pairing those two is the classic mistake: the motor buzzes, heats and does not turn.
+
+`VM` sits at a board corner, so it is the pin to check first if the driver is dead — a supply wire
+landing one position off puts 12 V onto `M1B`.
+
 `EN` is active low: pulled to GND the outputs are on, at `VIO` they are off. That matches the
 `enable_active_low` default of `true`, and it means the motors are released whenever the ESP32 is
 in reset or unpowered.
@@ -180,6 +211,10 @@ hand, so err low. For the 36H20HM:
 The datasheet's 80 °C rise is quoted *at* rated current with both phases on, so 0.5 A is the
 runs-very-hot case by design rather than a target.
 
+The modules ship with a stick-on heatsink. At a quarter amp it is not needed — the driver only
+starts to want one above roughly 0.85 A rms — but fit it anyway if the electronics end up in a
+sealed box, since a cooler driver drifts less between the Vref you set and the current it delivers.
+
 **Standstill current.** `PDN` low enables automatic power down, halving the current after about a
 second without step pulses. It will not engage while tracking, because at 144:1 the mount steps
 roughly every 90 ms and the driver never sees a standstill; it only helps a parked mount. `PDN` is
@@ -200,7 +235,9 @@ hotter buck feeding the Pi. It buys top speed, not torque.
 
 The KP35FM2 is the exception, and the reason it is a focuser here. At 37 Ω it needs 22.2 V just to
 reach rated current, so on 12 V it is capped at 12/37 = 0.32 A and about 54% of its torque. Proper
-headroom would want roughly 44 V, past the TMC2208's 35 V limit.
+headroom would want roughly 44 V, past the TMC2208's 35 V limit. (Vendor art for these modules
+prints the `VM` range as 5.5–36 V; 36 V is the absolute maximum, and 35 V is the working limit. Both
+are academic at 12 V.)
 
 One rail feeds both drivers. Current is set per driver at its own pot, so motors with different
 ratings share a supply without trouble.
