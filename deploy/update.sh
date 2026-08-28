@@ -114,24 +114,34 @@ fi
 if [[ ("$firmware_changed" == true || "$firmware_upload_needed" == true) && "${ESP32_AUTO_FLASH:-true}" == true ]]; then
   progress 3 5 "Building and uploading ESP32 firmware"
   backend/api/.venv/bin/pip install --quiet platformio
-  upload_args=()
-  if [[ "${ESP32_SERIAL_PORT:-auto}" != "auto" ]]; then
-    upload_args+=(--upload-port "$ESP32_SERIAL_PORT")
+  build_ok=true
+  backend/api/.venv/bin/pio run -d esp32/firmware -e "$board_env" || build_ok=false
+  if [[ "$build_ok" != true ]]; then
+    echo "ESP32 firmware build failed for board $board_env; continuing with Pi services."
   else
-    for candidate in /dev/ttyUSB* /dev/ttyACM*; do
-      if [[ -e "$candidate" ]]; then
-        upload_args+=(--upload-port "$candidate")
-        break
-      fi
-    done
-  fi
-  backend/api/.venv/bin/pio run -d esp32/firmware -e "$board_env"
-  if [[ ${#upload_args[@]} -eq 0 ]]; then
-    echo "ESP32 not connected; firmware was built but not uploaded."
-  elif ! backend/api/.venv/bin/pio run -d esp32/firmware -e "$board_env" -t upload "${upload_args[@]}"; then
-    echo "ESP32 firmware upload was not completed; continuing with Pi services."
-  else
-    printf '%s\n' "$firmware_stamp" > "$FIRMWARE_MARKER"
+    # esptool needs the port to itself, and the API holds it open for the whole of its uptime
+    systemctl stop astrodrive-api.service || true
+    upload_args=()
+    if [[ "${ESP32_SERIAL_PORT:-auto}" != "auto" ]]; then
+      upload_args+=(--upload-port "$ESP32_SERIAL_PORT")
+    else
+      for candidate in /dev/ttyUSB* /dev/ttyACM*; do
+        [[ -e "$candidate" ]] || continue
+        # existing is not the same as openable; a dead adapter would otherwise win the race
+        if backend/api/.venv/bin/python -c "import serial,sys; serial.Serial(sys.argv[1]).close()" "$candidate" 2>/dev/null; then
+          upload_args+=(--upload-port "$candidate")
+          break
+        fi
+      done
+    fi
+    if [[ ${#upload_args[@]} -eq 0 ]]; then
+      echo "ESP32 not connected; firmware was built but not uploaded."
+    elif backend/api/.venv/bin/pio run -d esp32/firmware -e "$board_env" -t upload "${upload_args[@]}"; then
+      printf '%s\n' "$firmware_stamp" > "$FIRMWARE_MARKER"
+    else
+      echo "ESP32 firmware upload was not completed; continuing with Pi services."
+    fi
+    systemctl start astrodrive-api.service || true
   fi
 fi
 if [[ "$firmware_changed" != true && "$firmware_upload_needed" != true || "${ESP32_AUTO_FLASH:-true}" != true ]]; then
