@@ -8,7 +8,7 @@ import subprocess
 from glob import glob
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import paho.mqtt.client as mqtt
 import serial
@@ -19,7 +19,7 @@ import astropy.units as u
 from skyfield.api import EarthSatellite, load, wgs84
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
 
 app = FastAPI(title="AstroDrive Mount API", version="0.1.0")
 app.add_middleware(
@@ -278,18 +278,31 @@ class SerialSettings(BaseModel):
     port: str = "auto"
 
 
+def _usable_pin(value: int) -> int:
+    # An ESP32 and an ESP8266 both wire GPIO 6-11 to the SPI flash and 1/3 to the USB console.
+    if 6 <= value <= 11:
+        raise ValueError("GPIO 6-11 are wired to the SPI flash")
+    if value in (1, 3):
+        raise ValueError("GPIO 1 and 3 carry the USB serial console")
+    return value
+
+
+# 34-39 exist on an ESP32 but are input only, so they cannot drive a STEP, DIR or ENABLE line.
+GpioPin = Annotated[int, Field(ge=0, le=33), AfterValidator(_usable_pin)]
+
+
 class MountSettings(BaseModel):
     ra_steps_per_revolution: int = Field(ge=1, le=1000000)
     dec_steps_per_revolution: int = Field(ge=1, le=1000000)
     ra_belt_ratio: float = Field(gt=0, le=1000)
     dec_belt_ratio: float = Field(gt=0, le=1000)
     driver_type: Literal["step_dir"] = "step_dir"
-    ra_step_pin: int = Field(ge=0, le=39)
-    ra_dir_pin: int = Field(ge=0, le=39)
-    ra_enable_pin: int = Field(ge=0, le=39)
-    dec_step_pin: int = Field(ge=0, le=39)
-    dec_dir_pin: int = Field(ge=0, le=39)
-    dec_enable_pin: int = Field(ge=0, le=39)
+    ra_step_pin: GpioPin
+    ra_dir_pin: GpioPin
+    ra_enable_pin: GpioPin
+    dec_step_pin: GpioPin
+    dec_dir_pin: GpioPin
+    dec_enable_pin: GpioPin
     enable_active_low: bool = True
 
 

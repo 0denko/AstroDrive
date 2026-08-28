@@ -1,28 +1,21 @@
 #include <Arduino.h>
 #include <cstdlib>
 #include <cstring>
-#include <Preferences.h>
+#include "MountConfig.h"
 #include "StepperMotor.h"
 
 namespace {
 constexpr uint32_t SERIAL_BAUD = 115200;
-constexpr uint8_t RA_STEP = 25;
-constexpr uint8_t RA_DIR = 26;
-constexpr uint8_t RA_ENABLE = 27;
-constexpr uint8_t DEC_STEP = 14;
-constexpr uint8_t DEC_DIR = 12;
-constexpr uint8_t DEC_ENABLE = 13;
 
-StepperMotor raMotor(RA_STEP, RA_DIR, RA_ENABLE);
-StepperMotor decMotor(DEC_STEP, DEC_DIR, DEC_ENABLE);
+MountConfig config = configDefaults();
+StepperMotor raMotor(config.raStep, config.raDir, config.raEnable);
+StepperMotor decMotor(config.decStep, config.decDir, config.decEnable);
 String commandBuffer;
-Preferences preferences;
 
 void loadConfiguration() {
-  preferences.begin("astrodrive", true);
-  raMotor.configure(preferences.getUChar("ras", RA_STEP), preferences.getUChar("rad", RA_DIR), preferences.getUChar("rae", RA_ENABLE), preferences.getBool("enlow", true));
-  decMotor.configure(preferences.getUChar("decs", DEC_STEP), preferences.getUChar("decd", DEC_DIR), preferences.getUChar("dece", DEC_ENABLE), preferences.getBool("enlow", true));
-  preferences.end();
+  configLoad(config);
+  raMotor.configure(config.raStep, config.raDir, config.raEnable, config.enableActiveLow);
+  decMotor.configure(config.decStep, config.decDir, config.decEnable, config.enableActiveLow);
 }
 
 void report(const String &message) {
@@ -73,19 +66,22 @@ void handleCommand(String command) {
                    (raMotor.isEnabled() && decMotor.isEnabled() ? "true" : "false") +
                    ",\"ra\":" + axisStatus(raMotor) +
                    ",\"dec\":" + axisStatus(decMotor) +
+                   ",\"pins\":[" + config.raStep + "," + config.raDir + "," + config.raEnable +
+                   "," + config.decStep + "," + config.decDir + "," + config.decEnable + "]" +
+                   ",\"enable_active_low\":" + (config.enableActiveLow ? "true" : "false") +
                    ",\"configured\":true}");
   } else if (command.startsWith("configure ")) {
     int raStep, raDir, raEnable, decStep, decDir, decEnable, activeLow;
-    if (sscanf(command.c_str(), "configure %d %d %d %d %d %d %d", &raStep, &raDir, &raEnable, &decStep, &decDir, &decEnable, &activeLow) == 7 && raStep >= 0 && raDir >= 0 && raEnable >= 0 && decStep >= 0 && decDir >= 0 && decEnable >= 0) {
-      preferences.begin("astrodrive", false);
-      preferences.putUChar("ras", raStep); preferences.putUChar("rad", raDir); preferences.putUChar("rae", raEnable);
-      preferences.putUChar("decs", decStep); preferences.putUChar("decd", decDir); preferences.putUChar("dece", decEnable); preferences.putBool("enlow", activeLow != 0);
-      preferences.end();
-      raMotor.configure(raStep, raDir, raEnable, activeLow != 0);
-      decMotor.configure(decStep, decDir, decEnable, activeLow != 0);
+    if (sscanf(command.c_str(), "configure %d %d %d %d %d %d %d", &raStep, &raDir, &raEnable, &decStep, &decDir, &decEnable, &activeLow) == 7 && pinUsable(raStep) && pinUsable(raDir) && pinUsable(raEnable) && pinUsable(decStep) && pinUsable(decDir) && pinUsable(decEnable)) {
+      config = MountConfig{static_cast<uint8_t>(raStep), static_cast<uint8_t>(raDir), static_cast<uint8_t>(raEnable),
+                           static_cast<uint8_t>(decStep), static_cast<uint8_t>(decDir), static_cast<uint8_t>(decEnable),
+                           activeLow != 0};
+      configSave(config);
+      raMotor.configure(config.raStep, config.raDir, config.raEnable, config.enableActiveLow);
+      decMotor.configure(config.decStep, config.decDir, config.decEnable, config.enableActiveLow);
       report("configuration_saved");
     } else {
-      Serial.println("{\"ok\":false,\"error\":\"invalid_configuration\"}");
+      fail("invalid_configuration");
     }
   } else if (command.startsWith("move ")) {
     char axis[8] = {};
