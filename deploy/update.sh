@@ -92,7 +92,10 @@ if [[ "${1:-}" == "--skip-fetch" ]] || [[ -z "$previous_revision" ]] || ! git di
   frontend_changed=true
 fi
 firmware_upload_needed=false
-if [[ "${ESP32_AUTO_FLASH:-true}" == true && "$(cat "$FIRMWARE_MARKER" 2>/dev/null || true)" != "$(git rev-parse HEAD)" ]]; then
+board_env="${ESP32_BOARD_ENV:-esp32dev}"
+# the marker carries the board too, so switching between an ESP32 and a NodeMCU reflashes
+firmware_stamp="$(git rev-parse HEAD) $board_env"
+if [[ "${ESP32_AUTO_FLASH:-true}" == true && "$(cat "$FIRMWARE_MARKER" 2>/dev/null || true)" != "$firmware_stamp" ]]; then
   firmware_upload_needed=true
 fi
 if [[ "${1:-}" != "--skip-fetch" && "$previous_revision" == "$(git rev-parse HEAD)" && "$firmware_upload_needed" != true && "$backend_changed" != true && "$frontend_changed" != true ]]; then
@@ -122,13 +125,13 @@ if [[ ("$firmware_changed" == true || "$firmware_upload_needed" == true) && "${E
       fi
     done
   fi
-  backend/api/.venv/bin/pio run -d esp32/firmware
+  backend/api/.venv/bin/pio run -d esp32/firmware -e "$board_env"
   if [[ ${#upload_args[@]} -eq 0 ]]; then
     echo "ESP32 not connected; firmware was built but not uploaded."
-  elif ! backend/api/.venv/bin/pio run -d esp32/firmware -t upload "${upload_args[@]}"; then
+  elif ! backend/api/.venv/bin/pio run -d esp32/firmware -e "$board_env" -t upload "${upload_args[@]}"; then
     echo "ESP32 firmware upload was not completed; continuing with Pi services."
   else
-    printf '%s\n' "$(git rev-parse HEAD)" > "$FIRMWARE_MARKER"
+    printf '%s\n' "$firmware_stamp" > "$FIRMWARE_MARKER"
   fi
 fi
 if [[ "$firmware_changed" != true && "$firmware_upload_needed" != true || "${ESP32_AUTO_FLASH:-true}" != true ]]; then
