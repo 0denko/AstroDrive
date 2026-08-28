@@ -7,6 +7,7 @@ A Raspberry Pi and ESP32 telescope mount controller.
 - `esp32/firmware`: Arduino firmware for two step/dir stepper drivers and newline-delimited serial commands.
 - `backend/api`: FastAPI service that publishes mount commands over MQTT and serves camera configuration.
 - `frontend/ui`: Vite + React operator interface.
+- `HARDWARE.md`: motors, drivers, power and the wiring diagram.
 
 ## Quick start
 
@@ -17,4 +18,4 @@ A Raspberry Pi and ESP32 telescope mount controller.
 
 For the shortest Raspberry Pi path, follow `deploy/RASPBERRY_PI.md`: flash Raspberry Pi OS Lite 64-bit, SSH in, and run one installer command.
 
-This is a control baseline. Verify motor driver wiring, current limits, travel limits, and an emergency stop before connecting a telescope.
+This is a control baseline. Verify motor driver wiring, current limits, travel limits, and an emergency stop before connecting a telescope. `HARDWARE.md` covers the driver and power wiring.
