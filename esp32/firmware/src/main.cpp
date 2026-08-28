@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <cstdlib>
 #include <cstring>
 #include <Preferences.h>
 #include "StepperMotor.h"
@@ -28,19 +29,50 @@ void report(const String &message) {
   Serial.println(String("{\"ok\":true,\"message\":\"") + message + "\"}");
 }
 
+void fail(const char *error) {
+  Serial.println(String("{\"ok\":false,\"error\":\"") + error + "\"}");
+}
+
+StepperMotor *resolveAxis(const char *axis) {
+  if (strcmp(axis, "ra") == 0) return &raMotor;
+  if (strcmp(axis, "dec") == 0) return &decMotor;
+  return nullptr;
+}
+
+String axisStatus(const StepperMotor &motor) {
+  return String("{\"moving\":") + (motor.isMoving() ? "true" : "false") +
+         ",\"position\":" + motor.position() +
+         ",\"speed\":" + String(motor.speed(), 2) + "}";
+}
+
 void handleCommand(String command) {
   command.trim();
   if (command == "enable") {
     raMotor.setEnabled(true);
     decMotor.setEnabled(true);
     report("motors_enabled");
-  } else if (command == "disable" || command == "stop") {
+  } else if (command == "stop") {
+    // Ramp down but stay energised; cutting current drops an unbalanced load.
+    raMotor.stop();
+    decMotor.stop();
+    report("motion_stopping");
+  } else if (command == "halt") {
+    raMotor.halt();
+    decMotor.halt();
+    report("motion_halted");
+  } else if (command == "disable") {
     raMotor.setEnabled(false);
     decMotor.setEnabled(false);
     report("motors_disabled");
+  } else if (command == "zero") {
+    raMotor.setPosition(0);
+    decMotor.setPosition(0);
+    report("position_zeroed");
   } else if (command == "status") {
     Serial.println(String("{\"ok\":true,\"enabled\":") +
                    (raMotor.isEnabled() && decMotor.isEnabled() ? "true" : "false") +
+                   ",\"ra\":" + axisStatus(raMotor) +
+                   ",\"dec\":" + axisStatus(decMotor) +
                    ",\"configured\":true}");
   } else if (command.startsWith("configure ")) {
     int raStep, raDir, raEnable, decStep, decDir, decEnable, activeLow;
@@ -60,23 +92,55 @@ void handleCommand(String command) {
     char direction[10] = {};
     int steps = 0;
     if (sscanf(command.c_str(), "move %7s %9s %d", axis, direction, &steps) == 3 && steps >= 0) {
-      StepperMotor *motor = strcmp(axis, "ra") == 0 ? &raMotor : &decMotor;
-      if (strcmp(axis, "ra") != 0 && strcmp(axis, "dec") != 0) {
-        Serial.println("{\"ok\":false,\"error\":\"invalid_axis\"}");
+      StepperMotor *motor = resolveAxis(axis);
+      if (motor == nullptr) {
+        fail("invalid_axis");
         return;
       }
       const bool forward = strcmp(direction, "forward") == 0;
       if (!forward && strcmp(direction, "backward") != 0) {
-        Serial.println("{\"ok\":false,\"error\":\"invalid_direction\"}");
+        fail("invalid_direction");
         return;
       }
-      for (int step = 0; step < steps; ++step) motor->step(forward);
-      report("move_complete");
+      motor->moveBy(forward ? steps : -steps);
+      report("move_started");
     } else {
-      Serial.println("{\"ok\":false,\"error\":\"invalid_move\"}");
+      fail("invalid_move");
+    }
+  } else if (command.startsWith("track ")) {
+    char axis[8] = {};
+    char rate[16] = {};
+    if (sscanf(command.c_str(), "track %7s %15s", axis, rate) == 2) {
+      StepperMotor *motor = resolveAxis(axis);
+      if (motor == nullptr) {
+        fail("invalid_axis");
+        return;
+      }
+      motor->setContinuousRate(atof(rate));
+      report("tracking_set");
+    } else {
+      fail("invalid_track");
+    }
+  } else if (command.startsWith("speed ")) {
+    char value[16] = {};
+    if (sscanf(command.c_str(), "speed %15s", value) == 1 && atof(value) > 0.0) {
+      raMotor.setMaxSpeed(atof(value));
+      decMotor.setMaxSpeed(atof(value));
+      report("speed_set");
+    } else {
+      fail("invalid_speed");
+    }
+  } else if (command.startsWith("accel ")) {
+    char value[16] = {};
+    if (sscanf(command.c_str(), "accel %15s", value) == 1 && atof(value) > 0.0) {
+      raMotor.setAcceleration(atof(value));
+      decMotor.setAcceleration(atof(value));
+      report("acceleration_set");
+    } else {
+      fail("invalid_acceleration");
     }
   } else {
-    Serial.println("{\"ok\":false,\"error\":\"unknown_command\"}");
+    fail("unknown_command");
   }
 }
 }  // namespace
@@ -90,12 +154,17 @@ void setup() {
 }
 
 void loop() {
+  raMotor.run();
+  decMotor.run();
+
   while (Serial.available() > 0) {
     const char character = static_cast<char>(Serial.read());
     if (character == '\n') {
       handleCommand(commandBuffer);
       commandBuffer = "";
-    } else if (character != '\r' && commandBuffer.length() < 128) {
+      break;  // one command per pass so the motors keep stepping
+    }
+    if (character != '\r' && commandBuffer.length() < 128) {
       commandBuffer += character;
     }
   }
