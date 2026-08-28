@@ -141,7 +141,9 @@ if [[ ("$firmware_changed" == true || "$firmware_upload_needed" == true) && "${E
     elif timeout 240 backend/api/.venv/bin/pio run -d esp32/firmware -e "$board_env" -t upload "${upload_args[@]}"; then
       printf '%s\n' "$firmware_stamp" > "$FIRMWARE_MARKER"
     else
-      echo "ESP32 firmware upload was not completed; continuing with Pi services."
+      # a failed flash is recorded too, or the timer would stop the API every quarter of an hour
+      printf '%s\n' "$firmware_stamp" > "$FIRMWARE_MARKER"
+      echo "ESP32 firmware upload FAILED for board $board_env; not retrying until the commit or board changes."
     fi
     trap - EXIT
     systemctl start astrodrive-api.service || true
