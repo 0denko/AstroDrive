@@ -5,6 +5,7 @@ import time
 import tempfile
 import threading
 import subprocess
+from collections import deque
 from glob import glob
 from datetime import datetime, timezone
 from pathlib import Path
@@ -61,6 +62,10 @@ serial_port_name = SERIAL_PORT
 serial_probed_at = 0.0
 # a missing board costs four failed opens, so status polls do not retry faster than this
 SERIAL_PROBE_INTERVAL = 3.0
+serial_log = deque(maxlen=400)
+serial_log_lock = threading.Lock()
+serial_log_seq = 0
+serial_reader_started = False
 mount_config = {
     "ra_steps_per_revolution": 3200,
     "dec_steps_per_revolution": 3200,
@@ -104,6 +109,19 @@ def save_mount_config() -> None:
     MOUNT_CONFIG_PATH.write_text(json.dumps(mount_config, indent=2) + "\n")
 
 
+def log_serial(direction: str, text: str) -> None:
+    """Keeps a short transcript of the link so the UI can show what the board actually said."""
+    global serial_log_seq
+    with serial_log_lock:
+        serial_log_seq += 1
+        serial_log.append({
+            "seq": serial_log_seq,
+            "at": datetime.now(timezone.utc).isoformat(),
+            "direction": direction,
+            "text": text,
+        })
+
+
 def connect_serial(port_name: str):
     candidates = [port_name] if port_name != "auto" else [
         "/dev/ttyUSB0",
@@ -140,13 +158,39 @@ def refresh_serial() -> None:
         serial_connection = connect_serial(serial_port_name)
 
 
+def serial_reader() -> None:
+    while True:
+        connection = serial_connection
+        if connection is None:
+            time.sleep(0.5)
+            continue
+        try:
+            # the port carries a one second timeout, so this yields even on a silent board
+            raw = connection.readline()
+        except (OSError, AttributeError, TypeError):
+            time.sleep(0.5)
+            continue
+        if raw:
+            log_serial("rx", raw.decode("utf-8", "replace").strip())
+
+
+def start_serial_reader() -> None:
+    global serial_reader_started
+    if serial_reader_started:
+        return
+    serial_reader_started = True
+    threading.Thread(target=serial_reader, name="serial-reader", daemon=True).start()
+
+
 def write_serial(command: str) -> bool:
     global serial_connection
     with serial_lock:
         if serial_connection is None:
+            log_serial("error", f"{command} (no serial device open)")
             return False
         try:
             serial_connection.write(f"{command}\n".encode("ascii"))
+            log_serial("tx", command)
             return True
         except OSError:
             try:
@@ -154,6 +198,7 @@ def write_serial(command: str) -> bool:
             except OSError:
                 pass
             serial_connection = None
+            log_serial("error", f"{command} (write failed, link dropped)")
             return False
 
 
@@ -276,6 +321,12 @@ class Target(BaseModel):
 
 class SerialSettings(BaseModel):
     port: str = "auto"
+
+
+class SerialCommand(BaseModel):
+    # the firmware splits on newlines, so the charset stops one request becoming several commands
+    command: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9 _.\-]+$")
+    wait_seconds: float = Field(default=2.0, ge=0.1, le=10.0)
 
 
 def _usable_pin(value: int) -> int:
@@ -407,6 +458,7 @@ def connect_mqtt() -> None:
         mqtt_connected = False
     serial_port_name = configured_serial_port()
     serial_connection = connect_serial(serial_port_name)
+    start_serial_reader()
     load_mount_config()
 
 
@@ -668,6 +720,37 @@ def update_mount_settings(request: MountSettings) -> dict:
     save_mount_config()
     publish({"command": "configure", **request.model_dump()})
     return {"mount_config": request.model_dump()}
+
+
+@app.get("/api/serial/log")
+def read_serial_log(after: int = 0) -> dict:
+    refresh_serial()
+    with serial_log_lock:
+        entries = [entry for entry in serial_log if entry["seq"] > after]
+        last_seq = serial_log_seq
+    return {
+        "entries": entries,
+        "last_seq": last_seq,
+        "connected": serial_connection is not None,
+        "device": serial_connection.port if serial_connection is not None else "",
+    }
+
+
+@app.post("/api/serial/command")
+def send_serial_command(request: SerialCommand) -> dict:
+    refresh_serial()
+    with serial_log_lock:
+        start = serial_log_seq
+    if not write_serial(request.command):
+        raise HTTPException(status_code=503, detail="No serial device is open")
+    deadline = time.monotonic() + request.wait_seconds
+    while time.monotonic() < deadline:
+        with serial_log_lock:
+            replies = [entry for entry in serial_log if entry["seq"] > start and entry["direction"] == "rx"]
+        if replies:
+            return {"sent": request.command, "replies": replies}
+        time.sleep(0.05)
+    return {"sent": request.command, "replies": []}
 
 
 @app.put("/api/settings/location")
