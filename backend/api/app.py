@@ -47,6 +47,8 @@ STACK_OUTPUT_PATH = CAMERA_CAPTURE_PATH / "latest.jpg"
 STACK_LOG_PATH = Path(tempfile.gettempdir()) / "astrodrive-stack.log"
 # a continuous run would grow an appended log without bound, so progress is rewritten in place
 STACK_STATUS_PATH = Path(tempfile.gettempdir()) / "astrodrive-stack.status"
+# the stacker re-reads this every frame, which is how the stretch changes without a restart
+STACK_TUNING_PATH = Path(tempfile.gettempdir()) / "astrodrive-stack.json"
 stack_lock = threading.Lock()
 stack_process: subprocess.Popen | None = None
 stack_frames = {"count": 0, "stopped": False}
@@ -296,15 +298,17 @@ class CameraControls(BaseModel):
     focus: int | None = None
 
 
-class StackRequest(BaseModel):
+class StackTuning(BaseModel):
+    # where the sky sits on the output scale; low keeps the night dark, high shows more faint detail
+    background: float = Field(default=0.15, ge=0.02, le=0.6)
+    # the fitted curve already sets the tone, so this is an extra bend and stays off by default
+    gamma: float = Field(default=1.0, ge=1, le=5)
+
+
+class StackRequest(StackTuning):
     # 0 keeps stacking until it is stopped, republishing the preview after every frame
     frames: int = Field(default=8, ge=0, le=600)
     interval_ms: int = Field(default=250, ge=0, le=10000)
-    # averaging frames removes noise but never brightens, so the stretch carries the whole exposure
-    # lift; 0 fits the curve to the frame instead, which a hand-picked number rarely gets right
-    stretch: float = Field(default=0.0, ge=0, le=64)
-    # the fitted curve already sets the tone, so this is an extra bend and stays off by default
-    gamma: float = Field(default=1.0, ge=1, le=5)
 
 
 class StackStatus(BaseModel):
@@ -495,6 +499,13 @@ def set_camera_controls(request: CameraControls) -> dict:
     return {"applied": applied, "unsupported": unsupported, "failures": failures, "controls": controls, "updated_controls": camera_control_values(controls)}
 
 
+def write_stack_tuning(tuning: StackTuning) -> None:
+    staging = STACK_TUNING_PATH.with_suffix(".partial")
+    staging.write_text(json.dumps({"background": tuning.background, "gamma": tuning.gamma}))
+    # swap in one step so a stacker reading between frames never sees half a file
+    staging.replace(STACK_TUNING_PATH)
+
+
 @app.post("/api/camera/stack", response_model=StackStatus)
 def stack_camera(request: StackRequest) -> StackStatus:
     global stack_process
@@ -504,9 +515,10 @@ def stack_camera(request: StackRequest) -> StackStatus:
             raise HTTPException(status_code=409, detail="A stack capture is already running")
         log = STACK_LOG_PATH.open("w")
         STACK_STATUS_PATH.write_text("Waiting for the first frame")
+        write_stack_tuning(request)
         try:
             stack_process = subprocess.Popen(
-                ["/usr/bin/python3", "/opt/astrodrive/deploy/stack-camera.py", str(STACK_OUTPUT_PATH), CAMERA_SNAPSHOT_URL, str(request.frames), str(request.interval_ms), str(request.stretch), str(request.gamma), str(STACK_STATUS_PATH)],
+                ["/usr/bin/python3", "/opt/astrodrive/deploy/stack-camera.py", str(STACK_OUTPUT_PATH), CAMERA_SNAPSHOT_URL, str(request.frames), str(request.interval_ms), str(STACK_TUNING_PATH), str(STACK_STATUS_PATH)],
                 stdout=log,
                 stderr=log,
                 start_new_session=True,
@@ -519,6 +531,12 @@ def stack_camera(request: StackRequest) -> StackStatus:
         stack_frames["stopped"] = False
     detail = "Stacking until stopped" if request.frames == 0 else f"Stacking {request.frames} frames"
     return StackStatus(state="running", detail=detail, frames=request.frames)
+
+
+@app.put("/api/camera/stack/tuning", response_model=StackStatus)
+def stack_tuning(request: StackTuning) -> StackStatus:
+    write_stack_tuning(request)
+    return stack_status()
 
 
 @app.post("/api/camera/stack/stop", response_model=StackStatus)

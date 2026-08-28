@@ -39,9 +39,12 @@ export default function App() {
   const [satellites, setSatellites] = useState([]);
   const [cameraControls, setCameraControls] = useState({});
   const [cameraMeta, setCameraMeta] = useState({ available: false, controls: {}, error: '' });
-  const [stack, setStack] = useState({ frames: 8, interval_ms: 250, stretch: 0, gamma: 1 });
+  const [stack, setStack] = useState({ frames: 8, interval_ms: 250, background: 0.15, gamma: 1 });
   const [stackImage, setStackImage] = useState('');
   const [stackBusy, setStackBusy] = useState(false);
+  // sliders fire on every pixel of a drag, so the device only sees the value that was settled on
+  const cameraApplyRef = useRef(null);
+  const stackApplyRef = useRef(null);
 
   async function request(path, options = {}) {
     const response = await fetch(`${API}${path}`, { headers: { 'Content-Type': 'application/json' }, ...options });
@@ -106,20 +109,38 @@ export default function App() {
       setCameraControls(result.values || {});
     } catch (error) { setCameraMeta({ available: false, controls: {}, error: error.message }); }
   }
-  async function saveCameraControls(event) {
-    event.preventDefault();
+  async function pushCameraControls(values) {
     const payload = {};
     for (const field of CAMERA_FIELDS) {
-      const value = cameraControls[field.key];
+      const value = values[field.key];
       if (!cameraMeta.controls[field.key] || value === undefined || value === '') continue;
       payload[field.key] = field.toggle ? Boolean(value) : Number(value);
     }
     try {
+      // the whole set goes every time because the driver refuses an exposure change unless auto
+      // exposure is re-asserted in the same call, and the API applies the auto controls first
       const result = await request('/api/camera/controls', { method: 'PUT', body: JSON.stringify(payload) });
       setCameraMeta({ available: true, controls: result.controls || cameraMeta.controls, error: '' });
-      setCameraControls(result.updated_controls || {});
       setMessage(result.failures?.length ? `Camera partly applied: ${result.failures.join('; ')}` : 'Camera settings applied');
     } catch (error) { setMessage(error.message); }
+  }
+  function setCameraControl(key, value) {
+    const next = { ...cameraControls, [key]: value };
+    setCameraControls(next);
+    clearTimeout(cameraApplyRef.current);
+    cameraApplyRef.current = setTimeout(() => pushCameraControls(next), 300);
+  }
+  function setStackField(key, value) {
+    const next = { ...stack, [key]: value };
+    setStack(next);
+    // frames and interval only decide how the next run starts, so there is nothing live to update
+    if (key !== 'background' && key !== 'gamma') return;
+    clearTimeout(stackApplyRef.current);
+    // a running stacker re-reads this between frames, so the preview restretches without losing any
+    stackApplyRef.current = setTimeout(async () => {
+      const body = JSON.stringify({ background: Number(next.background), gamma: Number(next.gamma) });
+      try { await request('/api/camera/stack/tuning', { method: 'PUT', body }); } catch (error) { setMessage(error.message); }
+    }, 250);
   }
   async function refreshStack() { try { const result = await request('/api/camera/stack'); if (result.image_url) setStackImage(result.image_url); return result; } catch { return null; } }
   async function runStack(event, frames) {
@@ -127,7 +148,7 @@ export default function App() {
     setStackBusy(true);
     setMessage(frames === 0 ? 'Live stack started' : 'Stack capture started');
     try {
-      await request('/api/camera/stack', { method: 'POST', body: JSON.stringify({ frames, interval_ms: Number(stack.interval_ms), stretch: Number(stack.stretch), gamma: Number(stack.gamma) }) });
+      await request('/api/camera/stack', { method: 'POST', body: JSON.stringify({ frames, interval_ms: Number(stack.interval_ms), background: Number(stack.background), gamma: Number(stack.gamma) }) });
       for (;;) {
         await new Promise((resolve) => setTimeout(resolve, STACK_POLL_MS));
         const result = await refreshStack();
@@ -161,13 +182,13 @@ export default function App() {
     <header><div><span className="eyebrow">MOUNT CONTROL / LIVE</span><h1>AstroDrive</h1></div><div className="status-stack"><div className="status-badges"><span className={`connection ${status?.esp32_connected ? 'online' : ''}`}>{status?.esp32_connected ? 'ESP32 ONLINE' : 'ESP32 OFFLINE'}</span><span className={`connection ${status?.mount === 'aligned' || status?.mount === 'tracking' ? 'online' : ''}`}>MOUNT {status?.mount?.replaceAll('_', ' ').toUpperCase() ?? 'CHECKING'}</span></div><div className="update-row" title={updateLabel}><button className={`update-ring ${ringState}`} style={{ '--progress': ringPercent }} onClick={triggerUpdate} disabled={updateBusy} aria-label={updateLabel} role="progressbar" aria-valuenow={ringPercent}><span>{ringGlyph}</span></button>{updateStatus.state === 'failed' && <span className="update-detail">{updateStatus.detail}</span>}</div></div></header>
     <section className="grid">
       <div className="panel camera"><div className="panel-heading"><span>Sky camera</span><span className="live-dot">● LIVE</span></div>{status?.camera_url ? <img src={status.camera_url} alt="Live sky camera" /> : <div className="empty">Waiting for camera stream</div>}</div>
-      <form className="panel camera-settings" onSubmit={saveCameraControls}>
+      <div className="panel camera-settings">
         <div className="panel-heading"><span>Camera controls</span><span>{cameraMeta.available ? 'V4L2' : 'UNAVAILABLE'}</span></div>
         {cameraMeta.available ? <>
           <div className="fields">{CAMERA_FIELDS.filter((field) => cameraMeta.controls[field.key]).map((field) => {
             const meta = cameraMeta.controls[field.key];
             const hint = meta.inactive ? 'Driver ignores this until the matching auto control is off' : '';
-            const set = (value) => setCameraControls({ ...cameraControls, [field.key]: value });
+            const set = (value) => setCameraControl(field.key, value);
             if (field.toggle) return <label key={field.key} title={hint}>{field.label}<select value={cameraControls[field.key] ? 'on' : 'off'} onChange={(event) => set(event.target.value === 'on')}><option value="on">ON</option><option value="off">OFF</option></select></label>;
             const value = cameraControls[field.key] ?? meta.value ?? meta.min ?? 0;
             // a few controls report no bounds, and a slider without them cannot say where it is
@@ -178,10 +199,9 @@ export default function App() {
               <span className="slider-scale"><span>{meta.min}</span><span>{meta.max}</span></span>
             </label>;
           })}</div>
-          <button className="primary" type="submit">Apply camera settings</button>
         </> : <p>{cameraMeta.error || 'This camera exposes no V4L2 controls'}</p>}
-      </form>
-      <form className="panel low-light" onSubmit={(event) => runStack(event, Number(stack.frames))}><div className="panel-heading"><span>Low-light stack</span><span>{stackBusy ? 'STACKING' : 'AVERAGE FRAMES'}</span></div><div className="fields"><label>Frames<input type="number" min="2" max="600" value={stack.frames} onChange={(event) => setStack({ ...stack, frames: event.target.value })} /></label><label>Interval ms<input type="number" min="0" value={stack.interval_ms} onChange={(event) => setStack({ ...stack, interval_ms: event.target.value })} /></label><label>Brightness gain (0 = auto)<input type="number" min="0" max="64" step="0.5" value={stack.stretch} onChange={(event) => setStack({ ...stack, stretch: event.target.value })} /></label><label>Extra gamma (1 = none)<input type="number" min="1" max="5" step="0.1" value={stack.gamma} onChange={(event) => setStack({ ...stack, gamma: event.target.value })} /></label></div><div className="actions"><button className="primary" type="submit" disabled={stackBusy}>{stackBusy ? 'Stacking...' : 'Capture stacked preview'}</button>{stackBusy ? <button type="button" onClick={stopStack}>Stop</button> : <button type="button" onClick={() => runStack(null, 0)}>Stack live</button>}</div>{stackImage && <img className="stack-preview" src={stackImage} alt="Stacked low-light preview" />}</form>
+      </div>
+      <form className="panel low-light" onSubmit={(event) => runStack(event, Number(stack.frames))}><div className="panel-heading"><span>Low-light stack</span><span>{stackBusy ? 'STACKING' : 'AVERAGE FRAMES'}</span></div><div className="fields"><label>Frames<input type="number" min="2" max="600" value={stack.frames} onChange={(event) => setStackField('frames', event.target.value)} /></label><label>Interval ms<input type="number" min="0" value={stack.interval_ms} onChange={(event) => setStackField('interval_ms', event.target.value)} /></label><label className="slider"><span className="slider-head">Sky brightness<b>{Number(stack.background).toFixed(2)}</b></span><input type="range" min="0.02" max="0.6" step="0.01" value={stack.background} onChange={(event) => setStackField('background', Number(event.target.value))} /><span className="slider-scale"><span>dark sky</span><span>faint detail</span></span></label><label className="slider"><span className="slider-head">Extra lift<b>{Number(stack.gamma).toFixed(1)}</b></span><input type="range" min="1" max="5" step="0.1" value={stack.gamma} onChange={(event) => setStackField('gamma', Number(event.target.value))} /><span className="slider-scale"><span>none</span><span>max</span></span></label></div><div className="actions"><button className="primary" type="submit" disabled={stackBusy}>{stackBusy ? 'Stacking...' : 'Capture stacked preview'}</button>{stackBusy ? <button type="button" onClick={stopStack}>Stop</button> : <button type="button" onClick={() => runStack(null, 0)}>Stack live</button>}</div>{stackImage && <img className="stack-preview" src={stackImage} alt="Stacked low-light preview" />}</form>
       <div className="panel controls"><div className="panel-heading"><span>Manual control</span><span>{status?.serial_port ?? 'auto'}</span></div><div className="dpad"><button onClick={() => sendCommand({ command: 'move', axis: 'dec', direction: 'forward', steps: 10 })}>DEC +</button><button onClick={() => sendCommand({ command: 'move', axis: 'ra', direction: 'backward', steps: 10 })}>RA −</button><button onClick={() => sendCommand({ command: 'stop' })}>STOP</button><button onClick={() => sendCommand({ command: 'move', axis: 'ra', direction: 'forward', steps: 10 })}>RA +</button><button onClick={() => sendCommand({ command: 'move', axis: 'dec', direction: 'backward', steps: 10 })}>DEC −</button></div><div className="actions"><button onClick={() => sendCommand({ command: 'enable' })}>Enable motors</button><button onClick={() => sendCommand({ command: 'disable' })}>Disable</button></div><form onSubmit={saveSerialPort}><label>ESP32 serial port<input value={serialPort} placeholder="auto or /dev/ttyACM0" onChange={(event) => setSerialPort(event.target.value)} /></label><button className="primary" type="submit">Save and reconnect</button></form></div>
       <form className="panel target" onSubmit={sendTarget}><div className="panel-heading"><span>Go-to target</span><span>{status?.alignment?.state === 'complete' ? 'READY' : 'ALIGN FIRST'}</span></div><label>Right ascension<input type="number" min="0" max="23.999" step="0.001" value={target.right_ascension} onChange={(event) => setTarget({ ...target, right_ascension: event.target.value })} /></label><label>Declination<input type="number" min="-90" max="90" step="0.001" value={target.declination} onChange={(event) => setTarget({ ...target, declination: event.target.value })} /></label><button className="primary" type="submit" disabled={status?.alignment?.state !== 'complete'}>Slew to target ↗</button></form>
       <form className="panel settings" onSubmit={saveSettings}><div className="panel-heading"><span>Mount + driver + site</span><span>{location.location_source}</span></div><div className="fields"><label>Driver type<select value={mount.driver_type} onChange={(event) => setMount({ ...mount, driver_type: event.target.value })}><option value="step_dir">STEP / DIR</option></select></label><label>Enable active<select value={mount.enable_active_low ? 'low' : 'high'} onChange={(event) => setMount({ ...mount, enable_active_low: event.target.value === 'low' })}><option value="low">LOW</option><option value="high">HIGH</option></select></label><label>RA STEP pin<input type="number" value={mount.ra_step_pin} onChange={(event) => setMount({ ...mount, ra_step_pin: event.target.value })} /></label><label>RA DIR pin<input type="number" value={mount.ra_dir_pin} onChange={(event) => setMount({ ...mount, ra_dir_pin: event.target.value })} /></label><label>RA ENABLE pin<input type="number" value={mount.ra_enable_pin} onChange={(event) => setMount({ ...mount, ra_enable_pin: event.target.value })} /></label><label>DEC STEP pin<input type="number" value={mount.dec_step_pin} onChange={(event) => setMount({ ...mount, dec_step_pin: event.target.value })} /></label><label>DEC DIR pin<input type="number" value={mount.dec_dir_pin} onChange={(event) => setMount({ ...mount, dec_dir_pin: event.target.value })} /></label><label>DEC ENABLE pin<input type="number" value={mount.dec_enable_pin} onChange={(event) => setMount({ ...mount, dec_enable_pin: event.target.value })} /></label><label>RA steps/rev<input type="number" value={mount.ra_steps_per_revolution} onChange={(event) => setMount({ ...mount, ra_steps_per_revolution: event.target.value })} /></label><label>DEC steps/rev<input type="number" value={mount.dec_steps_per_revolution} onChange={(event) => setMount({ ...mount, dec_steps_per_revolution: event.target.value })} /></label><label>RA belt ratio<input type="number" step="0.001" value={mount.ra_belt_ratio} onChange={(event) => setMount({ ...mount, ra_belt_ratio: event.target.value })} /></label><label>DEC belt ratio<input type="number" step="0.001" value={mount.dec_belt_ratio} onChange={(event) => setMount({ ...mount, dec_belt_ratio: event.target.value })} /></label><label>Latitude<input type="number" step="0.0001" value={location.latitude} onChange={(event) => setLocation({ ...location, latitude: event.target.value })} /></label><label>Longitude<input type="number" step="0.0001" value={location.longitude} onChange={(event) => setLocation({ ...location, longitude: event.target.value })} /></label><label>Elevation (m)<input type="number" value={location.elevation_m} onChange={(event) => setLocation({ ...location, elevation_m: event.target.value })} /></label><label>Location source<select value={location.location_source} onChange={(event) => setLocation({ ...location, location_source: event.target.value })}><option value="manual">Manual</option><option value="gps">GPS</option></select></label></div><MapPicker location={location} onPick={pickLocation} /><div className="actions"><button type="button" onClick={useBrowserLocation}>Use device location</button><button className="primary" type="submit">Save configuration</button></div></form>
