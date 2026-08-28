@@ -67,10 +67,16 @@ serial_log_lock = threading.Lock()
 serial_log_seq = 0
 serial_reader_started = False
 mount_config = {
+    # equatorial turns the primary axis in hour angle, so tracking is one constant rate;
+    # altaz turns it in azimuth, which needs both axes recomputed as the target climbs
+    "mount_type": "equatorial",
     "ra_steps_per_revolution": 3200,
     "dec_steps_per_revolution": 3200,
     "ra_belt_ratio": 1.0,
     "dec_belt_ratio": 1.0,
+    # gearing decides which way a positive step turns the sky, and it differs per build
+    "ra_reverse": False,
+    "dec_reverse": False,
     "driver_type": "step_dir",
     "ra_step_pin": 25,
     "ra_dir_pin": 26,
@@ -84,6 +90,9 @@ mount_config = {
     "elevation_m": 0.0,
     "location_source": "manual",
     "alignment": {"state": "not_started", "points": []},
+    # nothing on the mount reports an absolute angle, so Go-To works out a move from the last
+    # place the mount is known to have been pointed rather than from an encoder reading
+    "pointing": {"right_ascension": 0.0, "declination": 0.0},
     "tracking": False,
 }
 
@@ -361,10 +370,13 @@ GpioPin = Annotated[int, Field(ge=0, le=33), AfterValidator(_usable_pin)]
 
 
 class MountSettings(BaseModel):
+    mount_type: Literal["equatorial", "altaz"] = "equatorial"
     ra_steps_per_revolution: int = Field(ge=1, le=1000000)
     dec_steps_per_revolution: int = Field(ge=1, le=1000000)
     ra_belt_ratio: float = Field(gt=0, le=1000)
     dec_belt_ratio: float = Field(gt=0, le=1000)
+    ra_reverse: bool = False
+    dec_reverse: bool = False
     driver_type: Literal["step_dir"] = "step_dir"
     ra_step_pin: GpioPin
     ra_dir_pin: GpioPin
@@ -443,6 +455,95 @@ class StackStatus(BaseModel):
     completed_at: str = ""
 
 
+# the sky comes back round in a sidereal day of 86164.0905 s, not a solar one
+SIDEREAL_DEGREES_PER_SECOND = 360.0 / 86164.0905
+# alt-az rates drift slowly, so recomputing them this often is far finer than the mount can follow
+TRACKING_TICK_SECONDS = 10.0
+# a Go-To has to finish before tracking may touch the axes again, or it would cancel the move
+tracking_hold_until = 0.0
+tracking_thread_started = False
+
+
+def observer_location() -> EarthLocation:
+    return EarthLocation(
+        lat=mount_config["latitude"] * u.deg,
+        lon=mount_config["longitude"] * u.deg,
+        height=mount_config["elevation_m"] * u.m,
+    )
+
+
+def sky_to_axes(right_ascension: float, declination: float, when: Time) -> tuple[float, float]:
+    """Angles the primary and secondary axes must hold, in the frame the mount turns in."""
+    if mount_config["mount_type"] == "equatorial":
+        # the primary axis carries the hour angle, LST - RA. Local sidereal time is dropped here
+        # because it cancels whenever two positions are compared at one instant, and comparing
+        # two positions is all that Go-To and tracking ever ask for.
+        return -right_ascension * 15.0, declination
+    apparent = SkyCoord(ra=right_ascension * 15 * u.deg, dec=declination * u.deg).transform_to(
+        AltAz(obstime=when, location=observer_location())
+    )
+    return float(apparent.az.deg), float(apparent.alt.deg)
+
+
+def shortest_turn(degrees: float) -> float:
+    """Take the short way round, so a 350 degree slew becomes a 10 degree one the other way."""
+    return (degrees + 180.0) % 360.0 - 180.0
+
+
+def axis_steps_per_degree(axis: str) -> float:
+    return mount_config[f"{axis}_steps_per_revolution"] * mount_config[f"{axis}_belt_ratio"] / 360.0
+
+
+def axis_sign(axis: str) -> int:
+    return -1 if mount_config[f"{axis}_reverse"] else 1
+
+
+def tracking_rates(when: Time) -> list[tuple[str, float]]:
+    """Step rates that hold the current target still, one entry per axis that has to move."""
+    pointing = mount_config["pointing"]
+    if mount_config["mount_type"] == "equatorial":
+        # hour angle grows at a fixed rate, so a polar aligned mount needs one axis at one speed
+        return [("ra", axis_steps_per_degree("ra") * SIDEREAL_DEGREES_PER_SECOND * axis_sign("ra"))]
+    # in alt-az both rates depend on where the target is, and no closed form is worth writing out
+    # when astropy will give the answer twice and let the difference do the differentiating
+    ahead = when + TRACKING_TICK_SECONDS * u.s
+    from_primary, from_secondary = sky_to_axes(pointing["right_ascension"], pointing["declination"], when)
+    to_primary, to_secondary = sky_to_axes(pointing["right_ascension"], pointing["declination"], ahead)
+    return [
+        ("ra", shortest_turn(to_primary - from_primary) / TRACKING_TICK_SECONDS * axis_steps_per_degree("ra") * axis_sign("ra")),
+        ("dec", (to_secondary - from_secondary) / TRACKING_TICK_SECONDS * axis_steps_per_degree("dec") * axis_sign("dec")),
+    ]
+
+
+def tracking_loop() -> None:
+    next_tick = 0.0
+    while True:
+        time.sleep(1.0)
+        now = time.monotonic()
+        if not mount_config["tracking"] or now < tracking_hold_until or now < next_tick:
+            continue
+        next_tick = now + TRACKING_TICK_SECONDS
+        try:
+            rates = tracking_rates(Time.now())
+        except Exception as error:
+            log_serial("error", f"tracking rate failed: {error}")
+            continue
+        for axis, rate in rates:
+            try:
+                publish({"command": "track", "axis": axis, "rate": rate})
+            except HTTPException:
+                # the board is unreachable; the next tick retries rather than dropping tracking
+                break
+
+
+def start_tracking_loop() -> None:
+    global tracking_thread_started
+    if tracking_thread_started:
+        return
+    tracking_thread_started = True
+    threading.Thread(target=tracking_loop, daemon=True).start()
+
+
 def publish(payload: dict) -> None:
     delivered = False
     if mqtt_connected:
@@ -454,6 +555,8 @@ def publish(payload: dict) -> None:
             serial_command = command
         elif command == "move":
             serial_command = f"move {payload['axis']} {payload['direction']} {payload['steps']}"
+        elif command == "track":
+            serial_command = f"track {payload['axis']} {payload['rate']:.4f}"
         elif command == "configure":
             # the firmware reads this with sscanf %d, so a bare bool would arrive as "True" and be rejected
             serial_command = "configure {ra_step_pin} {ra_dir_pin} {ra_enable_pin} {dec_step_pin} {dec_dir_pin} {dec_enable_pin} {enable_active_low:d}".format(**payload)
@@ -478,6 +581,10 @@ def connect_mqtt() -> None:
     serial_connection = connect_serial(serial_port_name)
     start_serial_reader()
     load_mount_config()
+    # the sky has moved on since the last run and nothing has re-aligned the mount, so never come
+    # back up already driving the axes
+    mount_config["tracking"] = False
+    start_tracking_loop()
 
 
 @app.on_event("shutdown")
@@ -501,9 +608,10 @@ def status() -> dict:
         "serial_port": serial_port_name,
         "serial_device": serial_connection.port if serial_connection is not None else "",
         "mount": "tracking" if mount_config["tracking"] else "aligned" if mount_config["alignment"]["state"] == "complete" else "not_aligned",
-        "mount_config": {key: mount_config[key] for key in ("ra_steps_per_revolution", "dec_steps_per_revolution", "ra_belt_ratio", "dec_belt_ratio", "driver_type", "ra_step_pin", "ra_dir_pin", "ra_enable_pin", "dec_step_pin", "dec_dir_pin", "dec_enable_pin", "enable_active_low")},
+        "mount_config": {key: mount_config[key] for key in ("mount_type", "ra_steps_per_revolution", "dec_steps_per_revolution", "ra_belt_ratio", "dec_belt_ratio", "ra_reverse", "dec_reverse", "driver_type", "ra_step_pin", "ra_dir_pin", "ra_enable_pin", "dec_step_pin", "dec_dir_pin", "dec_enable_pin", "enable_active_low")},
         "location": location,
         "alignment": mount_config["alignment"],
+        "pointing": mount_config["pointing"],
         "tracking": mount_config["tracking"],
         "camera_url": CAMERA_URL,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -789,6 +897,10 @@ def alignment_action(request: AlignmentAction) -> dict:
         if len(mount_config["alignment"]["points"]) < 1:
             raise HTTPException(status_code=400, detail="Add at least one alignment point")
         mount_config["alignment"]["state"] = "complete"
+        # the last star centred is where the mount is standing, and every later Go-To is measured
+        # as a move away from it
+        last = mount_config["alignment"]["points"][-1]
+        mount_config["pointing"] = {"right_ascension": last["right_ascension"], "declination": last["declination"]}
     save_mount_config()
     return mount_config["alignment"]
 
@@ -810,13 +922,18 @@ def add_alignment_point(request: AlignmentPoint) -> dict:
 
 @app.post("/api/tracking")
 def tracking(request: TrackingRequest) -> dict:
+    global tracking_hold_until
     if request.enabled and mount_config["alignment"]["state"] != "complete":
         raise HTTPException(status_code=409, detail="Complete mount alignment before tracking")
     mount_config["tracking"] = request.enabled
     save_mount_config()
-    if not request.enabled:
+    if request.enabled:
+        publish({"command": "enable"})
+        # nothing is slewing, so let the tracking loop take the axes on its next pass
+        tracking_hold_until = 0.0
+    else:
         publish({"command": "stop"})
-    return {"tracking": request.enabled}
+    return {"tracking": request.enabled, "mount_type": mount_config["mount_type"]}
 
 
 @app.post("/api/command")
@@ -827,14 +944,31 @@ def command(request: Command) -> dict:
 
 @app.post("/api/target")
 def target(request: Target) -> dict:
+    global tracking_hold_until
     if mount_config["alignment"]["state"] != "complete":
         raise HTTPException(status_code=409, detail="Complete mount alignment before Go-To")
     now = Time.now()
-    location = EarthLocation(lat=mount_config["latitude"] * u.deg, lon=mount_config["longitude"] * u.deg, height=mount_config["elevation_m"] * u.m)
-    apparent = SkyCoord(ra=request.right_ascension * 15 * u.deg, dec=request.declination * u.deg).transform_to(AltAz(obstime=now, location=location))
-    target_data = {"command": "goto", **request.model_dump(), "altitude": float(apparent.alt.deg), "azimuth": float(apparent.az.deg), "timestamp": now.isot}
-    publish(target_data)
-    return {"accepted": True, "target": target_data}
+    pointing = mount_config["pointing"]
+    # both positions are converted at the same instant so the sky's own rotation cancels out
+    from_primary, from_secondary = sky_to_axes(pointing["right_ascension"], pointing["declination"], now)
+    to_primary, to_secondary = sky_to_axes(request.right_ascension, request.declination, now)
+    moves = [
+        ("ra", shortest_turn(to_primary - from_primary)),
+        ("dec", to_secondary - from_secondary),
+    ]
+    publish({"command": "enable"})
+    plan = []
+    for axis, degrees in moves:
+        steps = int(round(degrees * axis_steps_per_degree(axis) * axis_sign(axis)))
+        plan.append({"axis": axis, "degrees": round(degrees, 4), "steps": steps})
+        if steps:
+            publish({"command": "move", "axis": axis, "direction": "forward" if steps > 0 else "backward", "steps": abs(steps)})
+    # hold tracking off until the slew can plausibly be done, since a track command would cancel it
+    slowest = max((abs(entry["steps"]) for entry in plan), default=0)
+    tracking_hold_until = time.monotonic() + slowest / 500.0 + 2.0
+    mount_config["pointing"] = {"right_ascension": request.right_ascension, "declination": request.declination}
+    save_mount_config()
+    return {"accepted": True, "target": request.model_dump(), "mount_type": mount_config["mount_type"], "moves": plan, "timestamp": now.isot}
 
 
 @app.get("/api/objects/resolve")

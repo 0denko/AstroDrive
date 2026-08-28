@@ -37,6 +37,7 @@ class StepperMotor {
 
   void updateSpeed(uint32_t now);
   void applyDirection(bool forward);
+  float minimumSpeed() const;
 
   uint8_t stepPin_;
   uint8_t directionPin_;

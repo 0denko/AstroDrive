@@ -9,6 +9,9 @@ constexpr uint32_t kStepPulseMicros = 3;
 // TMC2208 needs DIR settled before the rising edge; only paid on reversal.
 constexpr uint32_t kDirectionSetupMicros = 5;
 constexpr float kMinSpeed = 1.0f;
+// sidereal tracking is a fraction of a step per second on a lightly geared axis, so continuous
+// mode needs a far lower floor than a slew does or the rate rounds away to no motion at all
+constexpr float kMinTrackingSpeed = 0.005f;
 }  // namespace
 
 StepperMotor::StepperMotor(uint8_t stepPin, uint8_t directionPin,
@@ -139,7 +142,7 @@ void StepperMotor::run() {
   updateSpeed(now);
 
   const float magnitude = fabsf(speed_);
-  if (magnitude < kMinSpeed) {
+  if (magnitude < minimumSpeed()) {
     lastStepMicros_ = now;
     return;
   }
@@ -160,7 +163,11 @@ void StepperMotor::run() {
 }
 
 bool StepperMotor::isMoving() const {
-  return enabled_ && fabsf(speed_) >= kMinSpeed;
+  return enabled_ && fabsf(speed_) >= minimumSpeed();
+}
+
+float StepperMotor::minimumSpeed() const {
+  return mode_ == Mode::Continuous ? kMinTrackingSpeed : kMinSpeed;
 }
 
 float StepperMotor::speed() const { return speed_; }
