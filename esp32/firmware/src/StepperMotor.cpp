@@ -144,9 +144,12 @@ void StepperMotor::run() {
     return;
   }
 
-  const uint32_t interval = static_cast<uint32_t>(1000000.0f / magnitude);
+  const uint32_t interval = static_cast<uint32_t>(1000000.0f / magnitude + 0.5f);
   if (now - lastStepMicros_ < interval) return;
-  lastStepMicros_ = now;
+  // advance by one whole interval, or however late the loop was gets added to every step period
+  lastStepMicros_ += interval;
+  // more than a full interval behind means a real stall, so resync rather than sprint to catch up
+  if (now - lastStepMicros_ > interval) lastStepMicros_ = now;
 
   const bool forward = speed_ > 0.0f;
   applyDirection(forward);
