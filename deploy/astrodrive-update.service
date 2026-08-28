@@ -1,8 +1,7 @@
 [Unit]
-Description=Update AstroDrive from Git before services start
+Description=Update AstroDrive from Git
 Wants=network-online.target
 After=network-online.target
-Before=astrodrive-api.service
 
 [Service]
 Type=oneshot

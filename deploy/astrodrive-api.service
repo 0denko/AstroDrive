@@ -1,6 +1,8 @@
 [Unit]
 Description=AstroDrive FastAPI backend
-After=network-online.target astrodrive-update.service
+# deliberately not ordered after astrodrive-update: that unit is oneshot, so the web UI would
+# stay down for the whole of a firmware toolchain download and build
+After=network-online.target
 Wants=network-online.target
 
 [Service]
