@@ -1,6 +1,7 @@
 backend/api/.venv/
 frontend/ui/node_modules/
 frontend/ui/dist/
+esp32/firmware/.pio/
 __pycache__/
 *.py[cod]
 .env
