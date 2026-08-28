@@ -61,10 +61,13 @@ graph LR
 Set each LM2596S output with a meter **before** connecting anything to it. They ship at an arbitrary
 voltage and a few turns of the pot is the difference between 5 V and 30 V into a Pi.
 
-These are 3 A parts on paper and closer to 2 A in still air. A Pi 4 or 5 under load plus a camera
-will brown out on a bare LM2596S, so either heatsink it and keep the input voltage low to reduce
-the drop, or power the Pi from its own supply and use the buck only for the relay board and any
-accessories. Undervolting a Pi shows up as random corruption long before it shows up as a reboot.
+These are 3 A parts on paper and closer to 2 A in still air. Any Pi under load plus a camera can
+brown out a bare LM2596S, and an older board is not the safe case: a Pi 3B peaks at 1.34 A under
+stress, slightly more than a Pi 4B's 1.25 A. So either heatsink the buck and keep the input voltage
+low to reduce the drop, or power the Pi from its own supply and use the buck only for the relay
+board and any accessories. Undervolting a Pi shows up as random corruption long before it shows up
+as a reboot: the detector trips at 4.63 V, so set the buck to about 5.1 V rather than 5.0 V to leave
+margin for the LM2596S's slow response to load steps.
 
 The ESP32 is powered over the same USB cable that carries its serial link to the Pi, so it does not
 need a rail of its own. Take driver `VIO` from the ESP32 `3V3` pin so the logic reference is the
