@@ -386,7 +386,8 @@ def publish(payload: dict) -> None:
         elif command == "move":
             serial_command = f"move {payload['axis']} {payload['direction']} {payload['steps']}"
         elif command == "configure":
-            serial_command = "configure {ra_step_pin} {ra_dir_pin} {ra_enable_pin} {dec_step_pin} {dec_dir_pin} {dec_enable_pin} {enable_active_low}".format(**payload)
+            # the firmware reads this with sscanf %d, so a bare bool would arrive as "True" and be rejected
+            serial_command = "configure {ra_step_pin} {ra_dir_pin} {ra_enable_pin} {dec_step_pin} {dec_dir_pin} {dec_enable_pin} {enable_active_low:d}".format(**payload)
         else:
             serial_command = ""
         if serial_command and write_serial(serial_command):
