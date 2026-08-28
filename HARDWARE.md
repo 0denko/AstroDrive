@@ -10,9 +10,9 @@ constants in [esp32/firmware/src/main.cpp](esp32/firmware/src/main.cpp) and the 
 | --- | --- | --- |
 | ESP32-WROOM | 3.3 V MCU module | Motion controller. The firmware targets `esp32dev`. |
 | TMC2208 driver modules | Stepper drivers, step/dir interface | One per axis, RA and DEC. |
-| 36H20HM stepper | 36 mm frame (NEMA 14) hybrid, 20 mm body | Larger of the two axes, normally RA. |
-| 36H18HM stepper | 36 mm frame (NEMA 14) hybrid, 18 mm body | Second axis, normally DEC. |
-| KP35FM2 stepper | 35 mm frame stepper | Spare, or a third axis such as focus. |
+| 36H20HM stepper | 0.9°, 0.5 A/phase, 12 Ω, 1100 g·cm | RA axis. |
+| 36H18HM stepper | 36 mm frame (NEMA 14) hybrid, 18 mm body | DEC axis. Specs still unconfirmed. |
+| KP35FM2 stepper | 1.8°, 0.6 A/phase, 37 Ω, 700 g·cm | Focuser only, see [Rail voltage](#rail-voltage). |
 | LM2596S modules | Adjustable buck converters, non-isolated | Derive 5 V logic from the 12 V motor rail. |
 | Relay modules | Opto-isolated relay boards | Switching dew heater, camera, or the motor rail. |
 | Amica NodeMCU | ESP8266 board, 3.3 V | Not used by the current firmware. See [Spare NodeMCU](#spare-nodemcu). |
@@ -20,22 +20,26 @@ constants in [esp32/firmware/src/main.cpp](esp32/firmware/src/main.cpp) and the 
 Note the TMC2208 is a stepper driver, not a servo driver, despite how these modules are often
 listed. It has no position feedback; the mount is open loop.
 
-### Confirm on the motor labels first
+### Motor specifications
 
-The three motors are the one thing here that cannot be pinned down from a part number alone, and
-both numbers below decide settings you have to enter by hand. Read them off the label or the
-supplier page before wiring:
+| | KP35FM2-035 | 36H20HM-0504A | 36H18HM |
+| --- | --- | --- | --- |
+| Step angle | 1.8° (200/rev) | 0.9° (400/rev) | unconfirmed |
+| Rated current per phase | 0.6 A | 0.5 A | unconfirmed |
+| Phase resistance | 37 Ω | 12 Ω | unconfirmed |
+| Phase inductance | not published | 9 mH | unconfirmed |
+| Holding torque | 700 g·cm (0.069 N·m) | 1100 g·cm (0.108 N·m) | unconfirmed |
+| Steps per rev at 1/16 | 3200 | **6400** | |
+| Rail needed for rated current | 22.2 V | 6.0 V | |
 
-| Value | Why it matters |
-| --- | --- |
-| Rated current per phase (A) | Sets the driver `Vref`. Guessing this cooks the motor or loses steps. |
-| Step angle (1.8° or 0.9°) | Sets steps per revolution. 1.8° is 200 full steps, 0.9° is 400. |
-| Phase resistance / rated voltage | Should stay under about 4 V phase voltage for the TMC2208 to drive well. |
-| Wire count | 4 wires is bipolar and works directly. 6 or 8 wires needs the right pairs picked. |
+The 36BYGH datasheet lists its columns as *Inductance* then *Resistance*, but the units row beneath
+reads Ω then mH. The units row is the correct one: 0.5 A × 12 Ω = 6.0 V, which is exactly the
+quoted rated voltage, whereas 9 Ω would give 4.5 V.
 
-Identify the coil pairs with a multimeter: the two wires that read a few ohms to each other are one
-coil, and there is no continuity between coils. One coil goes to `M1A`/`M1B`, the other to
-`M2A`/`M2B`.
+Identify the coil pairs with a multimeter, which also tells the motors apart: ~12 Ω within a pair is
+the 36H20HM, ~37 Ω is the KP35FM2, and between coils there is no continuity. One coil goes to
+`M1A`/`M1B`, the other to `M2A`/`M2B`. The KP35FM2 datasheet gives them outright: blue/red is phase
+one, yellow/white is phase two.
 
 ## Power
 
@@ -71,7 +75,8 @@ outputs, ESP32, and Pi.
 
 ```mermaid
 graph LR
-  subgraph ESP["ESP32-WROOM"]
+  PI["Raspberry Pi"] -->|"USB serial 115200"| ESP
+  subgraph ESP["ESP32 dev board"]
     P25["GPIO25"]
     P26["GPIO26"]
     P27["GPIO27"]
@@ -83,14 +88,16 @@ graph LR
     RS["STEP"]
     RD["DIR"]
     RE["EN"]
-    RM["MS1 + MS2<br/>to VIO"]
+    RMS["MS1 + MS2<br/>to VIO"]
+    RPC["PDN + CLK<br/>to GND"]
     RC["M1A M1B<br/>M2A M2B"]
   end
   subgraph DEC["TMC2208 - DEC"]
     DS["STEP"]
     DD["DIR"]
     DE["EN"]
-    DM["MS1 + MS2<br/>to VIO"]
+    DMS["MS1 + MS2<br/>to VIO"]
+    DPC["PDN + CLK<br/>to GND"]
     DC["M1A M1B<br/>M2A M2B"]
   end
   P25 --> RS
@@ -112,6 +119,15 @@ graph LR
 | DEC DIR | GPIO12 | `DEC_DIR` |
 | DEC ENABLE | GPIO13 | `DEC_ENABLE` |
 
+The remaining driver pins are tied off rather than driven:
+
+| Driver pin | Goes to |
+| --- | --- |
+| `MS1`, `MS2` | `VIO`, selecting 1/16 |
+| `PDN` | `GND`, enabling standstill current reduction |
+| `CLK` | `GND`, selecting the internal oscillator |
+| `NC` | nothing |
+
 Pins are changeable at runtime without reflashing, from the Mount panel in the UI or with
 `configure 25 26 27 14 12 13 1` over serial. The values persist in ESP32 NVS.
 
@@ -127,9 +143,9 @@ free pin instead. GPIO13, 14, 25, 26 and 27 have no such restriction.
 `enable_active_low` default of `true`, and it means the motors are released whenever the ESP32 is
 in reset or unpowered.
 
-**Microstepping.** Tie both `MS1` and `MS2` to `VIO` for 1/16 stealthChop. With 1.8° motors that is
-200 × 16 = **3200 steps per revolution**, which is the `ra_steps_per_revolution` default. Leaving
-the pins floating gives 1/8 instead and every slew lands at half the commanded angle.
+**Microstepping.** Tie both `MS1` and `MS2` to `VIO` for 1/16 stealthChop. Both pins have
+pull-downs, so leaving them floating gives 1/8 instead and every move lands at half the commanded
+angle.
 
 | MS1 | MS2 | Microstep |
 | --- | --- | --- |
@@ -138,19 +154,56 @@ the pins floating gives 1/8 instead and every slew lands at half the commanded a
 | VIO | GND | 1/4 |
 | VIO | VIO | 1/16 |
 
-If your motors turn out to be 0.9°, set steps per revolution to 6400 rather than rewiring.
+The 36H motors are 0.9°, so 400 × 16 = **6400 steps per revolution**. Set
+`ra_steps_per_revolution` and `dec_steps_per_revolution` to 6400 rather than the 3200 default, which
+assumes a 1.8° motor. The KP35FM2 is the 1.8° one at 3200.
 
-**Current.** Set it by measuring the voltage on the `Vref` pad against GND and turning the pot:
+**Current.** Measure the voltage on the `Vref` pad against GND and turn the pot:
 
 ```
 Vref = I_rms × 1.41
 ```
 
-Start at half the motor's rated current and raise it in 0.1 A steps only if you lose steps. A
-motor rated 1.0 A per phase starts around 0.5 A rms, so `Vref` ≈ 0.71 V. The module tops out at
-1.64 A rms, and anything above roughly 0.85 A rms wants a heatsink and moving air. Small NEMA 14
-motors on a mount draw far less than that, so err low: a tracking mount spends its life at low
-speed where torque is cheap, and a cooler driver drifts less.
+That formula is for Watterott SilentStepSticks and depends on the board's sense resistors, which
+differ between clones. On a third-party module treat it as an estimate: set `Vref` low, around
+0.2 V, confirm the axis moves, and raise it only if you lose steps.
+
+Heat rises with the square of current while torque rises only linearly, and gearing leaves torque in
+hand, so err low. For the 36H20HM:
+
+| Vref | Current | Both phases | Axis torque at 144:1 |
+| --- | --- | --- | --- |
+| 0.71 V | 0.5 A (rated) | 6.0 W, 80 °C rise | 10.9 N·m |
+| 0.35 V | 0.25 A | 1.5 W | 5.4 N·m |
+| 0.21 V | 0.15 A | 0.54 W | 3.3 N·m |
+
+The datasheet's 80 °C rise is quoted *at* rated current with both phases on, so 0.5 A is the
+runs-very-hot case by design rather than a target.
+
+**Standstill current.** `PDN` low enables automatic power down, halving the current after about a
+second without step pulses. It will not engage while tracking, because at 144:1 the mount steps
+roughly every 90 ms and the driver never sees a standstill; it only helps a parked mount. `PDN` is
+also the UART pin, so tying it to GND gives up UART configuration. Run it to a spare ESP32 pin
+instead if you may want spreadCycle for faster slews later.
+
+### Rail voltage
+
+A stepper's rated voltage is not a supply voltage. It is `I_rated × R`, the voltage a constant
+voltage drive would need to reach rated current, and a current-regulating driver is deliberately fed
+several times more so current can rise into the coil inductance as the motor turns. Run a motor at
+exactly its rated voltage and the corner speed is zero: it can hold position and nothing else.
+
+12 V suits the 36H pair. It gives 2× headroom over the 6.0 V they need for rated current and an
+electrical ceiling near 23,500 steps/s, far above the 1 kHz the firmware currently uses. 24 V would
+roughly double that ceiling, at the cost of more heat in the driver's internal regulator and a much
+hotter buck feeding the Pi. It buys top speed, not torque.
+
+The KP35FM2 is the exception, and the reason it is a focuser here. At 37 Ω it needs 22.2 V just to
+reach rated current, so on 12 V it is capped at 12/37 = 0.32 A and about 54% of its torque. Proper
+headroom would want roughly 44 V, past the TMC2208's 35 V limit.
+
+One rail feeds both drivers. Current is set per driver at its own pot, so motors with different
+ratings share a supply without trouble.
 
 **Direction is inverted** on TMC2xxx modules compared with A4988 and friends. If an axis runs
 backwards, flip it in software or rotate the motor connector 180°, not by rewiring one coil wire.
@@ -183,8 +236,10 @@ that matters, so a reboot does not switch the dew heater on unattended.
 
 ## Spare NodeMCU
 
-The ESP8266 has no role in the current design: the firmware in this repo builds for `esp32dev` and
-talks to the Pi over USB serial.
+The Amica NodeMCU is an ESP8266 and has no role in the current design: the firmware in this repo
+builds for `esp32dev` and talks to the Pi over USB serial. Note that ESP32 dev boards are commonly
+sold as "ESP32 NodeMCU" as well, and the board in the diagrams above is that ESP32, not this one.
+The ESP8266 could not host this pinout regardless, since GPIO25, 26 and 27 do not exist on it.
 
 There is a wireless path if you want one. The API publishes every mount command as JSON to the MQTT
 topic `telescope/mount/command`, alongside the serial write, so a NodeMCU subscribed to that topic
