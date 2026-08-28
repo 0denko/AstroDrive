@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 import tempfile
 import threading
 import subprocess
@@ -55,8 +56,11 @@ stack_frames = {"count": 0, "stopped": False}
 mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 mqtt_connected = False
 serial_connection = None
-serial_lock = threading.Lock()
+serial_lock = threading.RLock()
 serial_port_name = SERIAL_PORT
+serial_probed_at = 0.0
+# a missing board costs four failed opens, so status polls do not retry faster than this
+SERIAL_PROBE_INTERVAL = 3.0
 mount_config = {
     "ra_steps_per_revolution": 3200,
     "dec_steps_per_revolution": 3200,
@@ -113,6 +117,44 @@ def connect_serial(port_name: str):
         except (serial.SerialException, FileNotFoundError):
             continue
     return None
+
+
+def refresh_serial() -> None:
+    """The board is normally plugged in after the service starts, so probing only at startup left
+    the link down until a restart. Status polls re-probe instead."""
+    global serial_connection, serial_probed_at
+    with serial_lock:
+        if serial_connection is not None:
+            # an unplugged adapter leaves the handle open but the device node disappears
+            if Path(serial_connection.port).exists():
+                return
+            try:
+                serial_connection.close()
+            except OSError:
+                pass
+            serial_connection = None
+        now = time.monotonic()
+        if now - serial_probed_at < SERIAL_PROBE_INTERVAL:
+            return
+        serial_probed_at = now
+        serial_connection = connect_serial(serial_port_name)
+
+
+def write_serial(command: str) -> bool:
+    global serial_connection
+    with serial_lock:
+        if serial_connection is None:
+            return False
+        try:
+            serial_connection.write(f"{command}\n".encode("ascii"))
+            return True
+        except OSError:
+            try:
+                serial_connection.close()
+            except OSError:
+                pass
+            serial_connection = None
+            return False
 
 
 def camera_device() -> str:
@@ -334,9 +376,7 @@ def publish(payload: dict) -> None:
             serial_command = "configure {ra_step_pin} {ra_dir_pin} {ra_enable_pin} {dec_step_pin} {dec_dir_pin} {dec_enable_pin} {enable_active_low}".format(**payload)
         else:
             serial_command = ""
-        if serial_command:
-            with serial_lock:
-                serial_connection.write(f"{serial_command}\n".encode("ascii"))
+        if serial_command and write_serial(serial_command):
             delivered = True
     if not delivered:
         raise HTTPException(status_code=503, detail="MQTT broker and ESP32 are unavailable")
@@ -369,11 +409,13 @@ def disconnect_mqtt() -> None:
 
 @app.get("/api/status")
 def status() -> dict:
+    refresh_serial()
     location = {key: mount_config[key] for key in ("latitude", "longitude", "elevation_m", "location_source")}
     return {
         "connected": mqtt_connected,
         "esp32_connected": serial_connection is not None,
         "serial_port": serial_port_name,
+        "serial_device": serial_connection.port if serial_connection is not None else "",
         "mount": "tracking" if mount_config["tracking"] else "aligned" if mount_config["alignment"]["state"] == "complete" else "not_aligned",
         "mount_config": {key: mount_config[key] for key in ("ra_steps_per_revolution", "dec_steps_per_revolution", "ra_belt_ratio", "dec_belt_ratio", "driver_type", "ra_step_pin", "ra_dir_pin", "ra_enable_pin", "dec_step_pin", "dec_dir_pin", "dec_enable_pin", "enable_active_low")},
         "location": location,
@@ -591,16 +633,19 @@ def stack_status() -> StackStatus:
 
 @app.put("/api/settings/serial")
 def update_serial_settings(request: SerialSettings) -> dict:
-    global serial_connection, serial_port_name
+    global serial_connection, serial_port_name, serial_probed_at
     if request.port != "auto" and not request.port.startswith("/dev/"):
         raise HTTPException(status_code=422, detail="Serial port must be auto or a /dev path")
-    if serial_connection is not None:
-        serial_connection.close()
-    serial_port_name = request.port
-    SERIAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SERIAL_CONFIG_PATH.write_text(json.dumps({"port": serial_port_name}) + "\n")
-    serial_connection = connect_serial(serial_port_name)
-    return {"port": serial_port_name, "connected": serial_connection is not None}
+    with serial_lock:
+        if serial_connection is not None:
+            serial_connection.close()
+        serial_port_name = request.port
+        SERIAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        SERIAL_CONFIG_PATH.write_text(json.dumps({"port": serial_port_name}) + "\n")
+        serial_connection = connect_serial(serial_port_name)
+        serial_probed_at = time.monotonic()
+        device = serial_connection.port if serial_connection is not None else ""
+    return {"port": serial_port_name, "device": device, "connected": serial_connection is not None}
 
 
 @app.put("/api/settings/mount")
