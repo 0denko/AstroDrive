@@ -48,7 +48,7 @@ one, yellow/white is phase two.
 graph LR
   PSU["12 V DC supply<br/>4 A or better"] --> FUSE["Inline fuse"]
   FUSE --> VM["12 V motor rail"]
-  FUSE --> BUCK1["LM2596S<br/>set to 5.0 V"]
+  FUSE --> BUCK1["LM2596S<br/>set to 5.1 V at the Pi"]
   VM -->|VM| DRV_RA["TMC2208 RA"]
   VM -->|VM| DRV_DEC["TMC2208 DEC"]
   BUCK1 --> PI["Raspberry Pi 5 V"]
@@ -69,6 +69,15 @@ low to reduce the drop, or power the Pi from its own supply and use the buck onl
 board and any accessories. Undervolting a Pi shows up as random corruption long before it shows up
 as a reboot: the detector trips at 4.63 V, so set the buck to about 5.1 V rather than 5.0 V to leave
 margin for the LM2596S's slow response to load steps.
+
+**Set that 5.1 V by metering GPIO pin 2 (5 V) against pin 6 (GND) while the Pi is running, not at
+the buck's own terminals.** Regulation happens before the cable, so the loss in the lead and its
+connectors is invisible from the supply end. Measured on this build: 0.4 V lost between a buck
+reading 5.1 V and the Pi's pins, which is about 0.3 Ω where a short 20 AWG pair would be 0.05 Ω.
+That drop is proportional to current, so a setting trimmed at idle collapses under load. Winding the
+buck up to compensate works but leaves the Pi exposed to the full setpoint if the load falls or the
+bad connection is ever reseated, and 5.25 V is the ceiling. Fix the wire rather than the setpoint:
+short, thick, and few connectors.
 
 A serial port that appears and disappears every couple of seconds is an undervoltage symptom, not a
 board fault. The USB-to-serial bridge is a separate chip from the MCU and survives MCU resets, so
