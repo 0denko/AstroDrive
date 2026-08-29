@@ -2,20 +2,21 @@
 
 The parts on hand and how they wire into the mount. Pin numbers here match the firmware
 constants in [esp32/firmware/src/main.cpp](esp32/firmware/src/main.cpp) and the mount defaults in
-[backend/api/app.py](backend/api/app.py); change one and change the others.
+[backend/api/app.py](backend/api/app.py); change one and change the others. For a wire-by-wire
+checklist see [Connection list](#connection-list).
 
 ## Inventory
 
 | Part | What it is | Role here |
 | --- | --- | --- |
-| ESP32-WROOM | 3.3 V MCU module | Motion controller. The firmware targets `esp32dev`. |
+| ESP32-WROOM | 3.3 V MCU module | Motion controller, PlatformIO environment `esp32dev`. |
 | TMC2208 driver modules | Stepper drivers, step/dir interface | One per axis, RA and DEC. |
 | 36H20HM stepper | 0.9°, 0.5 A/phase, 12 Ω, 1100 g·cm | RA axis. |
 | 36H18HM stepper | 36 mm frame (NEMA 14) hybrid, 18 mm body | DEC axis. Specs still unconfirmed. |
 | KP35FM2 stepper | 1.8°, 0.6 A/phase, 37 Ω, 700 g·cm | Focuser only, see [Rail voltage](#rail-voltage). |
 | LM2596S modules | Adjustable buck converters, non-isolated | Derive 5 V logic from the 12 V motor rail. |
 | Relay modules | Opto-isolated relay boards | Switching dew heater, camera, or the motor rail. |
-| Amica NodeMCU | ESP8266 board, 3.3 V | Not used by the current firmware. See [Spare NodeMCU](#spare-nodemcu). |
+| Amica NodeMCU | ESP8266 board, 3.3 V | Alternative controller, environment `nodemcuv2`. See [NodeMCU as the controller](#nodemcu-as-the-controller). |
 
 Note the TMC2208 is a stepper driver, not a servo driver, despite how these modules are often
 listed. It has no position feedback; the mount is open loop.
@@ -121,32 +122,111 @@ graph LR
   DC --> M2["36H18HM<br/>DEC motor"]
 ```
 
-| Signal | ESP32 pin | Firmware constant |
-| --- | --- | --- |
-| RA STEP | GPIO25 | `RA_STEP` |
-| RA DIR | GPIO26 | `RA_DIR` |
-| RA ENABLE | GPIO27 | `RA_ENABLE` |
-| DEC STEP | GPIO14 | `DEC_STEP` |
-| DEC DIR | GPIO12 | `DEC_DIR` |
-| DEC ENABLE | GPIO13 | `DEC_ENABLE` |
+| Signal | ESP32 GPIO | NodeMCU GPIO | NodeMCU label | Firmware constant |
+| --- | --- | --- | --- | --- |
+| RA STEP | 25 | 5 | `D1` | `RA_STEP` |
+| RA DIR | 26 | 4 | `D2` | `RA_DIR` |
+| RA ENABLE | 27 | 16 | `D0` | `RA_ENABLE` |
+| DEC STEP | 14 | 14 | `D5` | `DEC_STEP` |
+| DEC DIR | 12 | 12 | `D6` | `DEC_DIR` |
+| DEC ENABLE | 13 | 13 | `D7` | `DEC_ENABLE` |
 
-The remaining driver pins are tied off rather than driven:
-
-| Driver pin | Goes to |
-| --- | --- |
-| `MS1`, `MS2` | `VIO`, selecting 1/16 |
-| `PDN` | `GND`, enabling standstill current reduction |
-| `CLK` | `GND`, selecting the internal oscillator |
-| `NC` | nothing |
+The UI and the `configure` command always take the GPIO number, never the `D` label.
 
 Pins are changeable at runtime without reflashing, from the Mount panel in the UI or with
-`configure 25 26 27 14 12 13 1` over serial. The values persist in ESP32 NVS.
+`configure 25 26 27 14 12 13 1` over serial. The values persist in ESP32 NVS, or EEPROM on an
+ESP8266. A `configure` naming pins that do not exist on the attached board is rejected whole, and
+the board silently keeps its own defaults, so the UI can show pins that are not the ones in use.
+Send `status` and read the `pins` array back if the two ever disagree.
 
 **GPIO12 is a strapping pin.** On the ESP32 it selects the flash voltage at reset, and a
 WROOM module with 3.3 V flash will fail to boot if GPIO12 is held high while it comes out of reset.
 A TMC2208 `DIR` input alone will not pull it up, so the default wiring is fine, but do not add a
 pull-up on that line, and if you ever put a level shifter or relay board on it, move DEC DIR to a
 free pin instead. GPIO13, 14, 25, 26 and 27 have no such restriction.
+
+## Connection list
+
+Every wire in the system, one per row, so it can be worked through and checked off. `RA` and `DEC`
+are the two TMC2208 modules. Controller pins are given for both boards because the GPIO numbering
+differs; use the column for the board you actually have.
+
+### Power
+
+| From | To | Notes |
+| --- | --- | --- |
+| 12 V PSU `+` | Inline fuse, in | 4 A or better |
+| Inline fuse, out | RA `VM` | Corner pin. One position off puts 12 V on `M1B` and kills the driver |
+| Inline fuse, out | DEC `VM` | |
+| Inline fuse, out | LM2596S `IN+` | |
+| 12 V PSU `−` | Ground bus | |
+| LM2596S `IN−` | Ground bus | |
+| LM2596S `OUT+` | Relay board `VCC`, accessories | Set to 5.1 V with a meter *before* connecting |
+| LM2596S `OUT−` | Ground bus | |
+| Dedicated 5.1 V 2.5 A supply | Raspberry Pi | Prefer its own supply over the buck; see [Power](#power) |
+| 100 µF+ electrolytic | RA `VM` → RA `GND` (power end) | As close to the driver as it will sit |
+| 100 µF+ electrolytic | DEC `VM` → DEC `GND` (power end) | |
+
+### Logic reference and ground
+
+| From | To | Notes |
+| --- | --- | --- |
+| Controller `3V3` | RA `VIO` | Same rail that drives `STEP`/`DIR` |
+| Controller `3V3` | DEC `VIO` | |
+| Controller `GND` | RA `GND` (logic end, beside `VIO`) | Keeps motor return off the signal ground |
+| Controller `GND` | DEC `GND` (logic end, beside `VIO`) | |
+| Ground bus | RA `GND` (power end, beside `VM`) | Supply return |
+| Ground bus | DEC `GND` (power end, beside `VM`) | |
+| Ground bus | Raspberry Pi `GND` | Every ground in the system must be common |
+
+### Control signals
+
+| ESP32 pin | NodeMCU pin | To |
+| --- | --- | --- |
+| GPIO25 | GPIO5 (`D1`) | RA `STEP` |
+| GPIO26 | GPIO4 (`D2`) | RA `DIR` |
+| GPIO27 | GPIO16 (`D0`) | RA `EN` |
+| GPIO14 | GPIO14 (`D5`) | DEC `STEP` |
+| GPIO12 | GPIO12 (`D6`) | DEC `DIR` |
+| GPIO13 | GPIO13 (`D7`) | DEC `EN` |
+
+### Driver tie-offs, on each of the two modules
+
+| Driver pin | To | Why |
+| --- | --- | --- |
+| `MS1` | `VIO` | With `MS2`, selects 1/16 |
+| `MS2` | `VIO` | Both float low, so unwired gives 1/8, not full step |
+| `PDN` | `GND` | Standstill current reduction. Gives up UART for good |
+| `CLK` | `GND` | Selects the internal oscillator |
+| `NC` | — | Leave unconnected |
+| `EN` | 10 kΩ to `VIO` | *In addition* to the GPIO, so coils stay off while the MCU is in reset |
+
+On a NodeMCU the `EN` pull-up is not optional on RA: GPIO16 has a pull-down where the other pins
+have pull-ups, so an active-low `EN` sitting there energises the coils at power-up.
+
+### Motors
+
+Identify the pairs with a meter first — continuity within a coil, none between coils.
+
+| Motor | Coil | To |
+| --- | --- | --- |
+| 36H20HM (RA) | one coil | RA `M1A`, RA `M1B` |
+| 36H20HM (RA) | other coil | RA `M2A`, RA `M2B` |
+| 36H18HM (DEC) | one coil | DEC `M1A`, DEC `M1B` |
+| 36H18HM (DEC) | other coil | DEC `M2A`, DEC `M2B` |
+
+`M2A` and `M1A` are physically adjacent on the header and both end in "A", but they belong to
+*different* coils. Pairing those two is the classic mistake: the motor buzzes, heats and does not
+turn.
+
+### Host link
+
+| From | To | Notes |
+| --- | --- | --- |
+| Raspberry Pi USB | Controller USB | Serial at 115200, and powers the board |
+
+That USB cable carries the board's whole supply, so its quality is part of the circuit. A thin or
+long cable drops enough voltage to re-enumerate the port; see [Power](#power).
 
 ## TMC2208 configuration
 
