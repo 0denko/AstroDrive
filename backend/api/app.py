@@ -768,6 +768,9 @@ def update_status() -> UpdateStatus:
         else:
             plain.append(line)
     last_line = plain[-1] if plain else ""
+    # the firmware flash can fail while every Pi-side step succeeds, and the run still reaches
+    # 100%, so without this the only symptom is a board quietly running its old build
+    warning = next((line for line in reversed(plain) if line.startswith("WARNING:")), "")
 
     active_state = properties.get("ActiveState", "")
     sub_state = properties.get("SubState", "")
@@ -778,7 +781,7 @@ def update_status() -> UpdateStatus:
         return UpdateStatus(state="failed", detail=last_line or "Update failed", progress=progress, invocation_id=invocation_id)
     # a finished run ends on whatever the last stage happened to print, which is not a status
     if progress == 100:
-        return UpdateStatus(state="idle", detail="Update finished", progress=progress, invocation_id=invocation_id)
+        return UpdateStatus(state="idle", detail=warning or "Update finished", progress=progress, invocation_id=invocation_id)
     return UpdateStatus(state="idle", detail=last_line or "No update is running", progress=progress, invocation_id=invocation_id)
 
 

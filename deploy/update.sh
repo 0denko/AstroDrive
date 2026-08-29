@@ -150,7 +150,7 @@ if [[ ("$firmware_changed" == true || "$firmware_upload_needed" == true) && "${E
       *) board_env="" ;;
     esac
     if [[ -z "$board_env" ]]; then
-      echo "Could not identify the attached board (${detected_chip:-no response on ${detect_port:-no port}}); skipping the firmware flash."
+      echo "WARNING: could not identify the attached board (${detected_chip:-no response on ${detect_port:-no port}}); skipping the firmware flash."
     else
       echo "Detected ${detected_chip}; building environment $board_env."
     fi
@@ -162,7 +162,7 @@ if [[ ("$firmware_changed" == true || "$firmware_upload_needed" == true) && "${E
     backend/api/.venv/bin/pio run -d esp32/firmware -e "$board_env" || build_ok=false
   fi
   if [[ "$build_ok" != true ]]; then
-    echo "ESP32 firmware build failed for board ${board_env:-unknown}; continuing with Pi services."
+    echo "WARNING: ESP32 firmware build failed for board ${board_env:-unknown}; the board still runs its previous firmware."
   else
     # esptool needs the port to itself, and the API holds it open for the whole of its uptime
     systemctl stop astrodrive-api.service || true
@@ -182,13 +182,14 @@ if [[ ("$firmware_changed" == true || "$firmware_upload_needed" == true) && "${E
       done
     fi
     if [[ ${#upload_args[@]} -eq 0 ]]; then
-      echo "ESP32 not connected; firmware was built but not uploaded."
+      echo "WARNING: ESP32 not connected; firmware was built but not uploaded."
     elif timeout 240 backend/api/.venv/bin/pio run -d esp32/firmware -e "$board_env" -t upload "${upload_args[@]}"; then
       printf '%s\n' "$firmware_stamp" > "$FIRMWARE_MARKER"
     else
-      # a failed flash is recorded too, or the timer would stop the API every quarter of an hour
+      # a failed flash is recorded too, or the timer would stop the API every quarter of an hour.
+      # That also means nothing here will retry it, so the message has to say how
       printf '%s\n' "$firmware_stamp" > "$FIRMWARE_MARKER"
-      echo "ESP32 firmware upload FAILED for board $board_env; not retrying until the commit or board changes."
+      echo "WARNING: ESP32 firmware upload FAILED for board $board_env; the board still runs its previous firmware. Retry with: sudo rm $FIRMWARE_MARKER"
     fi
     trap - EXIT
     systemctl start astrodrive-api.service || true
