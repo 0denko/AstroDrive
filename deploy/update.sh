@@ -44,6 +44,12 @@ reclaim_space() {
   echo "Reclaimed $((after - before)) MB; ${after} MB free."
 }
 
+# PlatformIO must never run as root: an update that dies before the closing chown leaves the build
+# tree and caches owned by root, and every later run fails with "Operation not permitted"
+as_service_user() {
+  sudo -u "$SERVICE_USER" env HOME="$INSTALL_DIR" PLATFORMIO_CORE_DIR="$PLATFORMIO_CORE_DIR" "$@"
+}
+
 if [[ $EUID -ne 0 ]]; then
   echo "Run the updater as root."
   exit 1
@@ -164,6 +170,13 @@ if [[ ("$firmware_changed" == true || "$firmware_upload_needed" == true) && "${E
     echo "WARNING: only ${free_mb} MB free on $INSTALL_DIR and the ESP toolchain needs about 600 MB; skipping the flash so the board keeps its working firmware. Free space and update again."
   else
     backend/api/.venv/bin/pip install --quiet platformio esptool
+    install -d -o "$SERVICE_USER" -g "$SERVICE_USER" "$PLATFORMIO_CORE_DIR"
+    # repairs the trees an older root-running updater left behind; a no-op once they are correct
+    for dir in "$PLATFORMIO_CORE_DIR" esp32/firmware/.pio; do
+      if [[ -e "$dir" && "$(stat -c %U "$dir")" != "$SERVICE_USER" ]]; then
+        chown -R "$SERVICE_USER":"$SERVICE_USER" "$dir"
+      fi
+    done
   fi
   if [[ "$firmware_space_ok" == true && "$board_env" == auto ]]; then
     # only the ROM can name the MCU, and the API holds the port for its whole uptime, so borrow it
@@ -201,7 +214,7 @@ if [[ ("$firmware_changed" == true || "$firmware_upload_needed" == true) && "${E
   elif [[ -z "$board_env" ]]; then
     build_ok=false
   else
-    backend/api/.venv/bin/pio run -d esp32/firmware -e "$board_env" || build_ok=false
+    as_service_user backend/api/.venv/bin/pio run -d esp32/firmware -e "$board_env" || build_ok=false
   fi
   if [[ "$build_ok" != true ]]; then
     if [[ "$firmware_space_ok" == true ]]; then
@@ -227,7 +240,7 @@ if [[ ("$firmware_changed" == true || "$firmware_upload_needed" == true) && "${E
     fi
     if [[ ${#upload_args[@]} -eq 0 ]]; then
       echo "WARNING: ESP32 not connected; firmware was built but not uploaded."
-    elif timeout 240 backend/api/.venv/bin/pio run -d esp32/firmware -e "$board_env" -t upload "${upload_args[@]}"; then
+    elif as_service_user timeout 240 backend/api/.venv/bin/pio run -d esp32/firmware -e "$board_env" -t upload "${upload_args[@]}"; then
       printf '%s\n' "$firmware_stamp" > "$FIRMWARE_MARKER"
     else
       # a failed flash is recorded too, or the timer would stop the API every quarter of an hour.
