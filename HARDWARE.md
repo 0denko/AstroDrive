@@ -69,6 +69,14 @@ board and any accessories. Undervolting a Pi shows up as random corruption long 
 as a reboot: the detector trips at 4.63 V, so set the buck to about 5.1 V rather than 5.0 V to leave
 margin for the LM2596S's slow response to load steps.
 
+A serial port that appears and disappears every couple of seconds is an undervoltage symptom, not a
+board fault. The USB-to-serial bridge is a separate chip from the MCU and survives MCU resets, so
+`dmesg` showing `USB disconnect` followed by `new full-speed USB device` with an incrementing device
+number means the bridge lost its own 5 V, not that the firmware crashed. Check `vcgencmd
+get_throttled` (anything but `0x0`) and `dmesg | grep -i undervoltage` before reflashing anything.
+Observed here as a two-second cycle that survived a reflash and stopped only while the board was
+held in its ROM bootloader, where it draws least.
+
 The ESP32 is powered over the same USB cable that carries its serial link to the Pi, so it does not
 need a rail of its own. Take driver `VIO` from the ESP32 `3V3` pin so the logic reference is the
 same one driving `STEP`/`DIR`. Every ground in the system must be common: motor supply, buck

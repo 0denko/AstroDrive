@@ -95,9 +95,9 @@ firmware_upload_needed=false
 board_env="${ESP32_BOARD_ENV:-esp32dev}"
 board_identity=""
 if [[ "$board_env" == auto ]]; then
-  # the USB bridge is a CH340 on most of these boards, so its ids cannot name the MCU. They only
-  # say "something different is plugged in", which is enough to trigger a fresh detection, and it
-  # reads from sysfs so it does not disturb the port the API is holding open
+  # the USB bridge (CH340, CP2102, ...) is a separate chip from the MCU, so its ids cannot name
+  # the MCU. They only say "something different is plugged in", which is enough to trigger a fresh
+  # detection, and it reads from sysfs so it does not disturb the port the API is holding open
   for candidate in /dev/ttyUSB* /dev/ttyACM*; do
     [[ -e "$candidate" ]] || continue
     board_identity+="$(udevadm info -q property -n "$candidate" 2>/dev/null | grep -E '^(ID_VENDOR_ID|ID_MODEL_ID|ID_SERIAL_SHORT)=' | sort | tr '\n' ',')"
