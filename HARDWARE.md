@@ -187,8 +187,9 @@ If you want the pin back but keep the release, tie both `EN` lines to one GPIO i
 rather than six, and a single command still frees both axes.
 
 **Microstepping.** Tie both `MS1` and `MS2` to `VIO` for 1/16 stealthChop. Both pins have
-pull-downs, so leaving them floating gives 1/8 instead and every move lands at half the commanded
-angle.
+pull-downs, so leaving them floating gives 1/8 instead: with `steps_per_revolution` set to 6400 for
+1/16, every step is then worth twice the angle the software thinks, and moves land at double the
+commanded angle.
 
 | MS1 | MS2 | Microstep |
 | --- | --- | --- |
