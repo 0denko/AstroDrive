@@ -124,8 +124,16 @@ else
 fi
 if [[ ("$firmware_changed" == true || "$firmware_upload_needed" == true) && "${ESP32_AUTO_FLASH:-true}" == true ]]; then
   progress 3 5 "Building and uploading ESP32 firmware"
-  backend/api/.venv/bin/pip install --quiet platformio esptool
-  if [[ "$board_env" == auto ]]; then
+  # a full card makes PlatformIO die deep inside a toolchain unpack, where it reads as a build error
+  firmware_space_ok=true
+  free_mb=$(($(df -Pk "$INSTALL_DIR" | awk 'NR==2 {print $4}') / 1024))
+  if (( free_mb < 600 )); then
+    firmware_space_ok=false
+    echo "WARNING: only ${free_mb} MB free on $INSTALL_DIR and the ESP toolchain needs about 600 MB; skipping the flash so the board keeps its working firmware. Free space and update again."
+  else
+    backend/api/.venv/bin/pip install --quiet platformio esptool
+  fi
+  if [[ "$firmware_space_ok" == true && "$board_env" == auto ]]; then
     # only the ROM can name the MCU, and the API holds the port for its whole uptime, so borrow it
     # for the few seconds the query takes rather than for the whole build
     systemctl stop astrodrive-api.service || true
@@ -156,13 +164,17 @@ if [[ ("$firmware_changed" == true || "$firmware_upload_needed" == true) && "${E
     fi
   fi
   build_ok=true
-  if [[ -z "$board_env" ]]; then
+  if [[ "$firmware_space_ok" != true ]]; then
+    build_ok=false
+  elif [[ -z "$board_env" ]]; then
     build_ok=false
   else
     backend/api/.venv/bin/pio run -d esp32/firmware -e "$board_env" || build_ok=false
   fi
   if [[ "$build_ok" != true ]]; then
-    echo "WARNING: ESP32 firmware build failed for board ${board_env:-unknown}; the board still runs its previous firmware."
+    if [[ "$firmware_space_ok" == true ]]; then
+      echo "WARNING: ESP32 firmware build failed for board ${board_env:-unknown}; the board still runs its previous firmware."
+    fi
   else
     # esptool needs the port to itself, and the API holds it open for the whole of its uptime
     systemctl stop astrodrive-api.service || true
