@@ -1145,7 +1145,8 @@ def resolve_object(name: str) -> dict:
 @app.get("/api/objects/satellites")
 def satellites(limit: int = 20) -> dict:
     try:
-        response = requests.get("https://celestrak.org/NORAD/elements/gp.php?GROUP=visual&FORMAT=tle", timeout=10)
+        # CelesTrak generates this group on demand and regularly takes ~20 s to answer
+        response = requests.get("https://celestrak.org/NORAD/elements/gp.php?GROUP=visual&FORMAT=tle", timeout=30)
         response.raise_for_status()
     except requests.RequestException as error:
         raise HTTPException(status_code=502, detail="Satellite data source unavailable") from error
