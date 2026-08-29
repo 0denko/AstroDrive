@@ -93,8 +93,19 @@ if [[ "${1:-}" == "--skip-fetch" ]] || [[ -z "$previous_revision" ]] || ! git di
 fi
 firmware_upload_needed=false
 board_env="${ESP32_BOARD_ENV:-esp32dev}"
+board_identity=""
+if [[ "$board_env" == auto ]]; then
+  # the USB bridge is a CH340 on most of these boards, so its ids cannot name the MCU. They only
+  # say "something different is plugged in", which is enough to trigger a fresh detection, and it
+  # reads from sysfs so it does not disturb the port the API is holding open
+  for candidate in /dev/ttyUSB* /dev/ttyACM*; do
+    [[ -e "$candidate" ]] || continue
+    board_identity+="$(udevadm info -q property -n "$candidate" 2>/dev/null | grep -E '^(ID_VENDOR_ID|ID_MODEL_ID|ID_SERIAL_SHORT)=' | sort | tr '\n' ',')"
+  done
+  board_identity=" ${board_identity:-none}"
+fi
 # the marker carries the board too, so switching between an ESP32 and a NodeMCU reflashes
-firmware_stamp="$(git rev-parse HEAD) $board_env"
+firmware_stamp="$(git rev-parse HEAD) $board_env$board_identity"
 if [[ "${ESP32_AUTO_FLASH:-true}" == true && "$(cat "$FIRMWARE_MARKER" 2>/dev/null || true)" != "$firmware_stamp" ]]; then
   firmware_upload_needed=true
 fi
@@ -113,11 +124,45 @@ else
 fi
 if [[ ("$firmware_changed" == true || "$firmware_upload_needed" == true) && "${ESP32_AUTO_FLASH:-true}" == true ]]; then
   progress 3 5 "Building and uploading ESP32 firmware"
-  backend/api/.venv/bin/pip install --quiet platformio
+  backend/api/.venv/bin/pip install --quiet platformio esptool
+  if [[ "$board_env" == auto ]]; then
+    # only the ROM can name the MCU, and the API holds the port for its whole uptime, so borrow it
+    # for the few seconds the query takes rather than for the whole build
+    systemctl stop astrodrive-api.service || true
+    trap 'systemctl start astrodrive-api.service || true' EXIT
+    detect_port=""
+    for candidate in /dev/ttyUSB* /dev/ttyACM*; do
+      [[ -e "$candidate" ]] || continue
+      detect_port="$candidate"
+      break
+    done
+    detected_chip=""
+    if [[ -n "$detect_port" ]]; then
+      detected_chip="$(timeout 30 backend/api/.venv/bin/python -m esptool --port "$detect_port" chip_id 2>/dev/null | grep -m1 'Chip is' || true)"
+    fi
+    trap - EXIT
+    systemctl start astrodrive-api.service || true
+    case "$detected_chip" in
+      *ESP8266*) board_env=nodemcuv2 ;;
+      # no environment exists for these yet, and flashing the wrong one is worse than not flashing
+      *ESP32-S*|*ESP32-C*|*ESP32-H*) board_env="" ;;
+      *ESP32*) board_env=esp32dev ;;
+      *) board_env="" ;;
+    esac
+    if [[ -z "$board_env" ]]; then
+      echo "Could not identify the attached board (${detected_chip:-no response on ${detect_port:-no port}}); skipping the firmware flash."
+    else
+      echo "Detected ${detected_chip}; building environment $board_env."
+    fi
+  fi
   build_ok=true
-  backend/api/.venv/bin/pio run -d esp32/firmware -e "$board_env" || build_ok=false
+  if [[ -z "$board_env" ]]; then
+    build_ok=false
+  else
+    backend/api/.venv/bin/pio run -d esp32/firmware -e "$board_env" || build_ok=false
+  fi
   if [[ "$build_ok" != true ]]; then
-    echo "ESP32 firmware build failed for board $board_env; continuing with Pi services."
+    echo "ESP32 firmware build failed for board ${board_env:-unknown}; continuing with Pi services."
   else
     # esptool needs the port to itself, and the API holds it open for the whole of its uptime
     systemctl stop astrodrive-api.service || true

@@ -4,6 +4,11 @@
 #include "MountConfig.h"
 #include "StepperMotor.h"
 
+// set per environment in platformio.ini; a board flashed before this existed answers "unknown"
+#ifndef ASTRODRIVE_BOARD
+#define ASTRODRIVE_BOARD "unknown"
+#endif
+
 namespace {
 constexpr uint32_t SERIAL_BAUD = 115200;
 
@@ -69,6 +74,7 @@ void handleCommand(String command) {
                    ",\"pins\":[" + config.raStep + "," + config.raDir + "," + config.raEnable +
                    "," + config.decStep + "," + config.decDir + "," + config.decEnable + "]" +
                    ",\"enable_active_low\":" + (config.enableActiveLow ? "true" : "false") +
+                   ",\"board\":\"" ASTRODRIVE_BOARD "\""
                    ",\"configured\":true}");
   } else if (command.startsWith("configure ")) {
     int raStep, raDir, raEnable, decStep, decDir, decEnable, activeLow;
