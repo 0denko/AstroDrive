@@ -7,6 +7,9 @@ INSTALL_DIR="${ASTRODRIVE_INSTALL_DIR:-/opt/astrodrive}"
 BRANCH="${ASTRODRIVE_BRANCH:-main}"
 SERVICE_USER="astrodrive"
 FIRMWARE_MARKER="/var/lib/astrodrive/firmware-revision"
+# PlatformIO keeps its toolchains in the invoking user's home, so a root updater and a hand-run
+# `sudo -u astrodrive pio` would otherwise each hold a full copy of them
+export PLATFORMIO_CORE_DIR="$INSTALL_DIR/.platformio"
 
 progress() {
   local current="$1" total="$2" label="$3" width=28 filled
@@ -17,6 +20,28 @@ progress() {
   printf "\n[%3d%%] [" $((current * 100 / total))
   printf "%*s" "$filled" "" | tr ' ' '#'
   printf "%*s] %s\n" $((width - filled)) "" "$label"
+}
+
+free_space_mb() {
+  local target="$1"
+  [[ -d "$target" ]] || target=/
+  echo $(($(df -Pk "$target" | awk 'NR==2 {print $4}') / 1024))
+}
+
+# everything here is a cache that refills on demand, and it only runs when the card is tight so a
+# healthy Pi is not rewriting its SD every quarter of an hour
+reclaim_space() {
+  local before after
+  before="$(free_space_mb "$INSTALL_DIR")"
+  if (( before >= 1200 )); then
+    return 0
+  fi
+  echo "Only ${before} MB free; clearing caches before continuing."
+  apt-get clean || true
+  journalctl --vacuum-size=64M >/dev/null 2>&1 || true
+  rm -rf "$PLATFORMIO_CORE_DIR/.cache" /root/.cache/pip "$INSTALL_DIR/.cache/pip" /tmp/mjpg-streamer || true
+  after="$(free_space_mb "$INSTALL_DIR")"
+  echo "Reclaimed $((after - before)) MB; ${after} MB free."
 }
 
 if [[ $EUID -ne 0 ]]; then
@@ -30,6 +55,12 @@ if ! flock -n 9; then
   exit 0
 fi
 export DEBIAN_FRONTEND=noninteractive
+# earlier versions ran PlatformIO as root, which stranded a second copy of the toolchains in /root
+if [[ -d /root/.platformio && "$PLATFORMIO_CORE_DIR" != /root/.platformio ]]; then
+  echo "Removing the stray root-owned PlatformIO toolchains; they live in $PLATFORMIO_CORE_DIR now."
+  rm -rf /root/.platformio
+fi
+reclaim_space
 apt-get update -qq
 apt-get install -y git python3 python3-venv python3-pip nginx nodejs npm v4l-utils build-essential cmake libjpeg-dev
 apt-get install -y imagemagick python3-pil python3-numpy
@@ -126,7 +157,8 @@ if [[ ("$firmware_changed" == true || "$firmware_upload_needed" == true) && "${E
   progress 3 5 "Building and uploading ESP32 firmware"
   # a full card makes PlatformIO die deep inside a toolchain unpack, where it reads as a build error
   firmware_space_ok=true
-  free_mb=$(($(df -Pk "$INSTALL_DIR" | awk 'NR==2 {print $4}') / 1024))
+  reclaim_space
+  free_mb="$(free_space_mb "$INSTALL_DIR")"
   if (( free_mb < 600 )); then
     firmware_space_ok=false
     echo "WARNING: only ${free_mb} MB free on $INSTALL_DIR and the ESP toolchain needs about 600 MB; skipping the flash so the board keeps its working firmware. Free space and update again."
