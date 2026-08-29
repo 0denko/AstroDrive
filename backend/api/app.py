@@ -77,6 +77,10 @@ mount_config = {
     # gearing decides which way a positive step turns the sky, and it differs per build
     "ra_reverse": False,
     "dec_reverse": False,
+    # a stepper vibrates instead of turning across its resonant band, so both of these are
+    # tuned by ear against the actual mount rather than calculated
+    "max_speed": 2000.0,
+    "acceleration": 4000.0,
     "driver_type": "step_dir",
     "ra_step_pin": 25,
     "ra_dir_pin": 26,
@@ -335,10 +339,12 @@ def camera_control_argument(field: str, value, entry: dict) -> int:
 
 
 class Command(BaseModel):
-    command: Literal["enable", "disable", "stop", "move"]
+    command: Literal["enable", "disable", "stop", "move", "track", "speed", "accel"]
     axis: Literal["ra", "dec"] | None = None
     direction: Literal["forward", "backward"] | None = None
     steps: int = Field(default=0, ge=0, le=100000)
+    rate: float = Field(default=0.0, ge=-20000, le=20000)
+    value: float = Field(default=0.0, ge=0, le=40000)
 
 
 class Target(BaseModel):
@@ -377,6 +383,8 @@ class MountSettings(BaseModel):
     dec_belt_ratio: float = Field(gt=0, le=1000)
     ra_reverse: bool = False
     dec_reverse: bool = False
+    max_speed: float = Field(default=2000.0, ge=1, le=20000)
+    acceleration: float = Field(default=4000.0, ge=1, le=40000)
     driver_type: Literal["step_dir"] = "step_dir"
     ra_step_pin: GpioPin
     ra_dir_pin: GpioPin
@@ -637,6 +645,8 @@ def publish(payload: dict) -> None:
             serial_command = f"move {payload['axis']} {payload['direction']} {payload['steps']}"
         elif command == "track":
             serial_command = f"track {payload['axis']} {payload['rate']:.4f}"
+        elif command in {"speed", "accel"}:
+            serial_command = f"{command} {payload['value']:.2f}"
         elif command == "configure":
             # the firmware reads this with sscanf %d, so a bare bool would arrive as "True" and be rejected
             serial_command = "configure {ra_step_pin} {ra_dir_pin} {ra_enable_pin} {dec_step_pin} {dec_dir_pin} {dec_enable_pin} {enable_active_low:d}".format(**payload)
@@ -688,7 +698,7 @@ def status() -> dict:
         "serial_port": serial_port_name,
         "serial_device": serial_connection.port if serial_connection is not None else "",
         "mount": "tracking" if mount_config["tracking"] else "aligned" if mount_config["alignment"]["state"] == "complete" else "not_aligned",
-        "mount_config": {key: mount_config[key] for key in ("mount_type", "ra_steps_per_revolution", "dec_steps_per_revolution", "ra_belt_ratio", "dec_belt_ratio", "ra_reverse", "dec_reverse", "driver_type", "ra_step_pin", "ra_dir_pin", "ra_enable_pin", "dec_step_pin", "dec_dir_pin", "dec_enable_pin", "enable_active_low")},
+        "mount_config": {key: mount_config[key] for key in ("mount_type", "ra_steps_per_revolution", "dec_steps_per_revolution", "ra_belt_ratio", "dec_belt_ratio", "ra_reverse", "dec_reverse", "max_speed", "acceleration", "driver_type", "ra_step_pin", "ra_dir_pin", "ra_enable_pin", "dec_step_pin", "dec_dir_pin", "dec_enable_pin", "enable_active_low")},
         "location": location,
         "alignment": mount_config["alignment"],
         "pointing": mount_config["pointing"],
@@ -925,6 +935,9 @@ def update_mount_settings(request: MountSettings) -> dict:
     mount_config.update(request.model_dump())
     save_mount_config()
     publish({"command": "configure", **request.model_dump()})
+    # the board keeps pins in NVS but not these, so they have to be pushed after every reboot
+    publish({"command": "speed", "value": request.max_speed})
+    publish({"command": "accel", "value": request.acceleration})
     return {"mount_config": request.model_dump()}
 
 
@@ -1061,6 +1074,11 @@ def command(request: Command) -> dict:
         # a nudge puts the axis in position mode, so tracking has to keep its hands off until the
         # move lands or the next tick would cancel it half way
         tracking_hold_until = time.monotonic() + request.steps / 500.0 + 2.0
+    elif request.command == "track":
+        # a bench test owns the axis until it is stopped
+        tracking_hold_until = time.monotonic() + 30.0
+    elif request.command == "stop":
+        tracking_hold_until = 0.0
     return {"accepted": True, "command": request.command}
 
 
