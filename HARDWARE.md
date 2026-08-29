@@ -227,6 +227,15 @@ The modules ship with a stick-on heatsink. At a quarter amp it is not needed —
 starts to want one above roughly 0.85 A rms — but fit it anyway if the electronics end up in a
 sealed box, since a cooler driver drifts less between the Vref you set and the current it delivers.
 
+**A finger on the board changing how the motor runs is a Vref symptom.** The trimmer sits between
+the two headers on this module and its wiper drives a high-impedance input, so skin resistance and
+body capacitance move the current setpoint as soon as you touch it. It is worst at a low Vref, where
+a few tens of millivolts is a large fraction of the setpoint, and marginal current also shows up as
+a motor that vibrates instead of turning. Confirm it with a meter on the `Vref` pad rather than by
+feel: if the reading moves as your hand approaches, that is the whole story. `MS1` also sits beside
+`EN` on the right-hand header, so a finger bridging those changes the microstep setting or drops the
+outputs entirely.
+
 **Standstill current.** `PDN` low enables automatic power down, halving the current after about a
 second without step pulses. It will not engage while tracking, because at 144:1 the mount steps
 roughly every 90 ms and the driver never sees a standstill; it only helps a parked mount. `PDN` is
