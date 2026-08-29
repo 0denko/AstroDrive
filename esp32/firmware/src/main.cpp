@@ -1,6 +1,9 @@
 #include <Arduino.h>
 #include <cstdlib>
 #include <cstring>
+#if defined(ARDUINO_ARCH_ESP8266)
+#include <ESP8266WiFi.h>
+#endif
 #include "MountConfig.h"
 #include "StepperMotor.h"
 
@@ -149,6 +152,13 @@ void handleCommand(String command) {
 
 void setup() {
   Serial.begin(SERIAL_BAUD);
+#if defined(ARDUINO_ARCH_ESP8266)
+  // the core restores whatever WiFi mode was last persisted, so a board that used to run AT
+  // firmware still powers its radio here, and those current spikes brown out a marginal USB supply
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_OFF);
+  WiFi.forceSleepBegin();
+#endif
   loadConfiguration();
   raMotor.begin();
   decMotor.begin();
