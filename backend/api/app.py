@@ -731,6 +731,20 @@ def _update_unit_log(invocation_id: str) -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
+def _update_unit_progress_line(invocation_id: str) -> str:
+    # a firmware build prints hundreds of compiler lines, so the newest progress marker is normally
+    # well outside the tail window that supplies the detail text
+    if not invocation_id:
+        return ""
+    result = subprocess.run(
+        ["journalctl", f"_SYSTEMD_INVOCATION_ID={invocation_id}", "-g", r"^\[ *[0-9]+%\]", "-n", "1", "-o", "cat", "--no-pager"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout.strip()
+
+
 @app.post("/api/update", response_model=UpdateResult)
 def trigger_update() -> UpdateResult:
     if not Path(UPDATE_SCRIPT).exists():
@@ -768,6 +782,11 @@ def update_status() -> UpdateStatus:
         else:
             plain.append(line)
     last_line = plain[-1] if plain else ""
+    if progress is None:
+        marker = UPDATE_PROGRESS_PATTERN.match(_update_unit_progress_line(invocation_id))
+        if marker:
+            progress = int(marker.group(1))
+            stage = marker.group(2).strip()
     # the firmware flash can fail while every Pi-side step succeeds, and the run still reaches
     # 100%, so without this the only symptom is a board quietly running its old build
     warning = next((line for line in reversed(plain) if line.startswith("WARNING:")), "")
