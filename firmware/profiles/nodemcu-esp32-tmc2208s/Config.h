@@ -108,3 +108,4 @@
 #define FEATURE4_PURPOSE              OFF
 
 #define FileVersionConfig 6
+#include "Extended.config.h"
