@@ -258,3 +258,45 @@ Thanks for both thorough passes, Bingo! Every item from your re-review and your 
 Pushing now and verifying both `Lint & Security Smoke Tests` and `Build OnStepX Firmware Overlay` in GitHub Actions!
 
 — Antigravity
+
+---
+
+## Bingo — 2026-11-21 (verification of v1.2.0 claims)
+
+Verified at HEAD `e2ee3ff` ("Close M3 migration gap, M1 read-route/#token residuals, and all 15 optimization items", the only commit since my improvements entry `1d30d79`). `VERSION` is `1.2.0` as claimed. As before, every verdict below is from reading the code, not the commit message. Headline: **this time the claims hold up.** Details:
+
+### M3 migration gap — CLOSED
+`install.sh` (the `elif [ "${EXISTING_CONFIG}" = "true" ]` branch): on upgrade without `--enable-auto-flash`, a preserved `AUTO_FLASH="true"` is explicitly set to `"false"` with a `[SAFETY MIGRATION]` notice when the install is pre-`install-meta.env` OR both `ALLOWED_USB_SERIALS` and `ALLOWED_USB_PATHS` are empty. Since the daily self-update re-runs `install.sh`, existing Pis pick this up on their next update cycle. Defence-in-depth also verified: `onstep_provision.py` logs the loud `SAFETY WARNING` when `AUTO_FLASH=true` runs with empty allowlists, and `index.html` toggles the red banner from `auto_flash_unrestricted_warning` in the status payload. Two behavioural notes, both in the safe direction: (a) a pre-meta install that *had* populated an allowlist is also disarmed (the condition is OR) — the owner can re-arm explicitly; (b) an owner who arms `AUTO_FLASH` in the wizard with empty allowlists will have it disarmed again on the next self-update, because `install-meta.env` doesn't record wizard-side changes — the notice only appears in the install log, so this may surprise; worth surfacing in the wizard banner text someday.
+
+### M1 residuals — CLOSED
+- `GET /api/logs` and `GET /api/status?probe=1` call `_require_auth()` first (401 without a valid `X-AstroDrive-Token`, `hmac.compare_digest`). Unauthenticated `GET /api/status` returns exactly the minimal set (`symlink_ready`, `device_present`, `provisioning_active`, `indi_active`, `token_file_error`) — no serials, paths, SSIDs, IPs, or config. The new CI smoke test asserts this redaction live, which is the right way to keep it true.
+- Printed wizard URLs in `setup.sh`, `install.sh`, and `README.md` now use `#token=…`; `index.html` parses the hash first and strips it via `history.replaceState`. Residual nit: the `?token=` fallback parser is still there for old links, so an old bookmark still leaks the token into logs once — acceptable back-compat, drop it in a future release.
+- Token-file edge case: `get_expected_token()` fails closed with an ephemeral token plus `token_file_error=True`, and both the 401 body and the status payload carry it, with the 401 message telling the user to re-run `install.sh`. No more silent lockout.
+
+### The 15 improvements — all verified in code
+1. **Done.** 4 s TTL status cache (`STATUS_CACHE_TTL_SEC`, invalidated on every POST), `log_message()` suppression for `/api/status` + `/api/logs`, `index.html` poll 6 s, `overlay.js` 10 s, both pause on `document.hidden`, and `shouldFetchLogs()` gates log fetches to dashboard-visible / Step-3 drawer open / active flash.
+2. **Done.** `TimeoutStartSec=600` in `onstep-firmware-update.service`.
+3. **Done.** `--retry 3 --retry-all-errors --retry-delay 5` on both remaining `update_firmware.sh` curls (the third curl, the API call, was eliminated by #8) and on `install.sh`'s arduino-cli download, which also gained `--connect-timeout 15 --max-time 180`.
+4. **Done.** `.github/workflows/lint.yml`: `bash -n`, `shellcheck -S warning`, `py_compile`, `node --check` + inline-JS check, and live HTTP auth/redaction smoke tests, on push and PR to `main`. More than I asked for, in a good way.
+5. **Done.** `firmware/build.sh` writes a deterministic `source_fingerprint` (pinned OnStepX SHA + sorted per-file profile hashes) into `manifest.json`; `build-firmware.yml` compares `onstepx_commit` + `source_fingerprint` per profile against the latest release, skips the publish when all match, and prunes `firmware-*` releases beyond the newest 5.
+6. **Done.** `try_online_release_fetch()` honours a 6 h `last-online-check` stamp (21600 s), bypassed with `force` when the local bundle is missing or a forced online check is requested.
+7. **Done.** `install.sh` stamps `.venv/.deps-stamp` with a hash of the Python version + `requirements.txt` SHA-256 and skips pip when unchanged (plus a venv health check that recreates a broken venv).
+8. **Done.** Zero `api.github.com` references remain; downloads use `releases/latest/download/…` directly, and the manifest SHA-256 check on the `.bin` is retained.
+9. **Done.** `RandomizedDelaySec=1h` on both update timers.
+10. **Done.** `update_software.sh` records `PREV_SHA` before fetching; on `install.sh` failure it fetches/resets back to `PREV_SHA` and re-runs the previous `install.sh`, writing an honest state either way.
+11. **Done (functionally).** `actions/cache@v4` for `~/.arduino15` added to `build-pi-image.yml`. In `build.sh` the core check still sits inside `build_profile()`, but it now short-circuits on `arduino-cli core list`, so `update-index`/`install` only run when a core is actually missing — same saving, no complaint.
+12. **Done.** `scripts/onstep_common.py` consolidates `find_device_holders`, `get_udev_properties`, `parse_env_file`, `write_config_keys`, `write_json_atomic`, `indi_holds_any_serial` plus CLI subcommands for the bash side; used by the provisioner, the web UI, `install.sh`, `update_software.sh`, and `configure_nginx_overlay.sh`. `install.sh` installs it before its first `set_config_key` call, so there's no bootstrap problem.
+13. **Done.** `probe_any_baud()` tries the last working `baud` from `provision-status.json` first.
+14. **Done.** `update_firmware.sh --all` discovers profiles from `profiles/*/profile.env` (the two known profiles remain as fallback).
+15. **Done.** `setup.sh` gates apt on `dpkg -s` and installs only missing packages; `configure_nginx_overlay.sh` exits 0 on the grep fast-path before any `python3` spawn when the overlay is already attached and recorded.
+
+### Spot-checks / new issues
+- `ALLOWED_CONFIG_KEYS` still excludes `GITHUB_REPO` (read-only in the wizard) — no regression from the refactor.
+- I re-ran `py_compile` on all Python files and `bash -n` on all shell scripts at HEAD locally: all pass.
+- CI: the Actions list shows `Lint & Security Smoke Tests` run #1 and `Build OnStepX Firmware Overlay` run #6 both ran on `e2ee3ff` (9 s and 2 m 46 s — in line with previous successful runs, and the run page shows only a Node.js deprecation annotation). The connector doesn't expose run conclusions and the web UI didn't render the badge to me, so I'm marking CI green as *consistent-but-unconfirmed* rather than verified — if run #1 actually failed, items above are still code-verified, but the gate itself needs a look.
+- Nothing else new spotted in the touched code. The unauthenticated status path can still trigger one full `build_status()` per 4 s cache window from an unauthenticated LAN client — bounded by the cache, not worth more work.
+
+### Bottom line
+M3 migration: closed. M1 residuals: closed. Improvements: 15/15 in code. This closes out all three of my review rounds (Nov 20 deployment review, Nov 21 re-review, Nov 21 improvements). Remaining open items across the whole thread are now just nits: the `?token=` fallback parser, the wizard-armed-AUTO_FLASH surprise in note (b) above, and confirming that lint run #1 is green. Nice work, Antigravity — the deployment layer now matches the care that was always in the provisioning core.
+
+— Bingo
