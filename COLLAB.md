@@ -529,3 +529,160 @@ Per the owner's request ("AutoInstall camera stuff" — keeping the one-line ins
 - Updated [`README.md`](README.md) and [`CHANGELOG.md`](CHANGELOG.md) accordingly.
 
 — Antigravity
+
+## Bingo — 2026-11-21 — Comprehensive code review of v1.3.0 (HEAD 39491afd)
+
+Full-tree static review at HEAD `39491afd` (v1.3.0 + the auto-install follow-up): installer and self-update, provisioning/firmware pipeline, web UI service, camera daemon, and CI workflows. Every finding below was verified against the code; line numbers are from the files at this HEAD. Tests were read but not executed, and CI run status is not visible from here, so runtime behaviour claims are marked as such.
+
+Headline: **no critical findings.** The v1.2.0 must-fixes M1–M3 are verified still fixed (see "Checked and solid"). This entry also replaces my v1.3.0 review draft from today's daily check, which never landed; its two open notes are folded in and both are now confirmed by the full review (INDI mid-stream is R12; the install-cost documentation note is in Minor/CI).
+
+### Major findings
+
+**R1 — config.env injection chain: crafted USB serial → root code execution in the daily updater.**
+`webui/onstep_webui.py:191-214` (`remember_usb_device`) takes `ID_SERIAL_SHORT` / `ID_PATH` straight from udev properties and persists them via `write_config_keys`; `scripts/onstep_common.py:46-63` writes `f'{key}="{updates[key]}"'` with no escaping of quotes or newlines; `scripts/update_software.sh:26,30` then `source`s `config.env` (and the meta file) as root, and the same file is the web UI service's `EnvironmentFile`. A USB device presenting a serial containing `"` or a newline breaks out of the quoted value and injects arbitrary lines into the AUTO_FLASH safety allowlist's own file — and into a root shell at the next daily update. The 8 HTTP-writable config keys are properly regex-validated; this path is not. Fix: validate serial/path against a strict charset (e.g. `^[A-Za-z0-9._-]{1,64}$`) in `remember_usb_device`, escape values in `write_config_keys`, and stop `source`-ing config in the updater (parse it instead).
+
+**R2 — The self-updater overwrites the script it is currently executing.**
+`astrodrive-update.service` runs `/opt/onstep-autoprovision/scripts/update_software.sh`, which runs `install.sh`, which reinstalls `update_software.sh` in place (`install -m 0755`, install.sh ~141). Bash reads the running script by byte offset, so the tail of the updater (version bookkeeping, `write_state`, the rollback branch) can be read from the *new* file at the old offset and mis-parsed or skipped. Fix: the updater should copy itself (and `onstep_common.py`) to `/run` and exec from there before invoking install.sh, or the unit should ExecStart a tiny stable shim that does that.
+
+**R3 — "Rollback" does not restore the installed tree; install is non-atomic and in place.**
+install.sh overwrites `/opt`, systemd units, udev rules, config, and the venv item by item, restarting services near the end. The updater's recovery is only `git reset --hard PREV_SHA` plus re-running the old install.sh. A mid-install failure (apt error, power cut) leaves an old/new mix that re-running the installer may not fix, and there is no snapshot of `/opt` to restore. The rollback also depends on fetching an arbitrary SHA into a `--depth 1` clone; whether fetch-by-SHA works against this repo could not be verified from here. Fix: snapshot the installed tree (it is small) before overwriting and restore files on failure; keep the previous clone or a tarball so rollback does not depend on fetch-by-SHA.
+
+**R4 — systemd timeout budgets are shorter than the pipeline's own worst case, in three units.**
+- `astrodrive-update.service`: `TimeoutStartSec=600`, but the update can apt-install `python3-opencv`/`python3-numpy` (hundreds of MB), pip-install, and install two Arduino cores on a Pi 3B — systemd can kill it mid-apt (dpkg left needing manual repair) or mid-pip.
+- `onstep-autoprovision@.service`: `TimeoutStartSec=900`, but the code's own budgets sum to ~1,150s (fetch 150 + compile 720 + flash 2×120 + probe/settle). A second device's instance first blocks on the global flock with no timeout, inside the same 900s. A kill can land during `write_flash` — recoverable by reflashing, but the controller is dead in the field and the status file says nothing.
+- `onstep-firmware-update.service`: `TimeoutStartSec=600` vs ~560s of curl budgets *per profile*, two profiles.
+Fix: raise the timeouts (3600 / ≥1500 / ≥1200), and give the flock an acquisition timeout that fails fast with a "busy" status.
+
+**R5 — The provisioner never handles subprocess timeouts, so timeouts are invisible.**
+`TimeoutExpired` appears nowhere in `scripts/onstep_provision.py`, yet four `subprocess.run(..., timeout=...)` calls can raise it (chip detect :226, fetch :330, compile :361, flash :437). An expiry kills `main()` with a traceback and `write_provision_status` is never called, so the wizard keeps showing the previous run's stale state. The budgets also contradict each other: the 150s fetch timeout is shorter than `update_firmware.sh`'s own worst case (~190s for the manifest curl, ~370s for the .bin). Fix: catch `TimeoutExpired` at each call site, log it, write a specific failure status, and align the budgets.
+
+**R6 — The firmware manifest's `chip` field is never validated, and the legacy fallback accepts a profile-less manifest for any chip.**
+`load_manifest` (onstep_provision.py:264-285) checks only that `binary` and `sha256` exist and that the hash matches — never `manifest["chip"]` against the detected silicon, even though `firmware/build.sh` writes it into every manifest. The legacy flat-layout fallback (:386-394) uses `mf.get("profile", profile) == profile`, which passes by construction when the manifest has no profile key. `update_firmware.sh:118-122` has the same gap on the download side. The only remaining backstop is esptool's `--chip` enforcement — external and unverified from here. Fix: require an exact chip and profile match in `load_manifest` (a missing field is a rejection, not a pass) and mirror it in `update_firmware.sh`.
+
+**R7 — The web UI service runs as root with a broad capability set; the PIN is the only barrier.**
+`systemd/onstep-webui.service` has no `User=` (runs as root), `CapabilityBoundingSet` includes `CAP_SETUID CAP_SETGID CAP_CHOWN CAP_DAC_OVERRIDE`, and `ReadWritePaths` includes all of `/home`. The process starts systemd units, sets the clock, and writes `/etc` config by design — so any future auth bypass or handler bug is instant root. Fix: run as a dedicated user, grant the specific `systemctl start` operations via polkit or a tiny root helper, drop the SETUID/SETGID/CHOWN caps, and scope `ReadWritePaths` to the INDI subdirectory actually needed.
+
+**R8 — One static, never-expiring token, sent over plaintext HTTP and stored in localStorage.**
+The server binds `0.0.0.0:8090` in plain HTTP (onstep_webui.py:1062-1064); `index.html` keeps the token in `localStorage` indefinitely. On the field hotspot (WPA2-PSK, one shared password) anyone who knows the hotspot password and captures a client's handshake can decrypt that client's traffic and recover the full-control token permanently. Separately, the `?token=` URL fallback (index.html ~657-668) defeats the `#token=` fragment design — a query-string token lands in nginx/proxy logs. The token itself is strong (128-bit, `hmac.compare_digest`, fails closed if the file is broken). Fix: exchange the PIN once for a short-lived session token, drop the `?token=` fallback, and document plainly that the PIN is a full-control credential sent unencrypted (or serve HTTPS with an install-generated self-signed cert and print its fingerprint at setup).
+
+**R9 — Camera: cloud rejection can lock out stacking permanently after repointing.**
+In `scripts/onstep_camera.py` (~487-495) the cloud check runs *before* `star_history.append`, and rejected frames never append — so after stacking a rich field, slewing to a genuinely sparse field makes every frame "rejected_clouds" forever; the median can never decay. Only a manual reset or mode change recovers. During a long cloudy spell `ref_align_mono` also goes stale, so when the sky clears the accumulated drift can exceed the jump limit and `bump_reset` discards the whole stack. Fix: append the observed count even on cloud-rejected frames (or expire history entries by age), and auto-clear the cloud state after N consecutive rejections.
+
+**R10 — Camera: Keep-Best % mixes two incomparable score scales in one history.**
+`grade_frame` (:195-223) returns `100/median_fwhm` (≈8–100) in star mode but raw Laplacian variance (unbounded, different units) in the fallback; both feed the single `score_history` whose percentile is the keep threshold (:417-424). Whenever the metric flips mid-session (intermittent star detection, Moon/star transitions) the threshold is computed over a bimodal mix and frames are kept/rejected essentially arbitrarily until the 200-frame deque flushes — exactly the variable-cloud conditions where lucky selection matters most. Fix: separate score histories per metric; threshold from the current frame's metric only.
+
+**R11 — Camera: no exception guard around per-frame processing — one transient error destroys the in-RAM stack.**
+In the daemon loop (:964-1000) only the preview-encode block has try/except. `cap.read()`, `process_frame`, and `process_commands` (whose save branch can raise from `save_png`) are unguarded; any transient numpy/cv2/subprocess error propagates out, systemd restarts the daemon, and an hours-long stack is gone. Fix: wrap the per-iteration body in try/except that logs, reopens the capture, and continues; guard the save action separately.
+
+**R12 — Camera: INDI contention is checked only before the camera is opened, never while streaming.**
+`find_device_holders` runs only in the `if cap is None:` path (:916-935). Once streaming, INDI opening the device is discovered only indirectly if reads start failing, and `process_commands` issues `v4l2-ctl --set-ctrl` against the device (~845, ~858) regardless of who holds it, so a web UI control change can alter exposure/gain on a device INDI is actively using. (This confirms open note 2 from my v1.3.0 draft.) Fix: re-run the holder check periodically while streaming (e.g. with the 1.5s status publish), publish `busy_indi` / release the device if INDI appears, and skip v4l2 writes when a foreign holder is present.
+
+**R13 — Pi-image releases steal the "Latest" slot the firmware update channel depends on.**
+`build-pi-image.yml:227-229` runs `gh release create` with no `--latest=false`; `build-firmware.yml:125` explicitly passes `--latest`, confirming firmware is meant to own that slot. But `scripts/update_firmware.sh:61,64` resolves firmware exclusively through `releases/latest/download`. After any Pi-image publish, "Latest" has only an `.img.xz` and a `.sha256`, so manifest fetches 404 and firmware updates fail on every installed Pi (and fresh installs end with the "firmware wasn't downloaded" warning) until the next firmware publish. It fails closed — no wrong firmware is installed — which is why this is major, not critical. Fix: add `--latest=false` to the Pi-image publish; longer term, resolve the newest `firmware-*` tag via the API instead of `releases/latest`.
+
+**R14 — Firmware dedupe fingerprint ignores the toolchain, so changed binaries can be silently skipped as "unchanged".**
+`source_fp` (firmware/build.sh:201-209) covers only the OnStepX commit and the profile directory's files. `CORE_SPEC`, esptool, arduino-cli, and build.sh itself are not inputs — yet the publish step skips publishing when the fingerprint matches. Bump a core or fix build.sh's merge logic and CI produces a different binary with the same fingerprint: publish skipped, CI green, stale binary stays "latest". Fix: fold `CORE_SPEC`, tool versions, and a hash of `firmware/build.sh` into `source_fp`.
+
+**R15 — The hotspot password is a workflow input, which is public in the run record.**
+`build-pi-image.yml:30-33` takes `hotspot_password` as a plain `workflow_dispatch` input. Inputs are not secrets: on a public repo the run page shows them to anyone. The value is then baked into the image as the hotspot PSK (:164-183) — that part is by design; the run-metadata exposure is not. Fix: drop the password input (SSID only; set the password in the Setup Wizard, as the input description itself suggests), or document prominently that the value becomes public.
+
+**R16 — install.sh is never executed by CI on push/PR.**
+lint.yml:22-29 gives install.sh only `bash -n` + `shellcheck -S warning`. The one place it actually runs end-to-end is the Pi-image workflow's chroot step, which is `workflow_dispatch`-only. A runtime failure under `set -euo pipefail` merges green and is discovered by a user running the one-line install. Fix: add a CI job that runs install.sh in `--chroot` mode in a container/ARM64 chroot on PRs touching install.sh/setup.sh (the Pi-image workflow already proves the recipe), or at least a mocked execution harness.
+
+### Minor findings (one line each)
+
+Provisioning / firmware:
+- Online-check throttle stamp is touched *before* the return code is checked (onstep_provision.py:331-336) — one transient failure suppresses online checks for 6 hours.
+- The flash-once ticket is consumed before the allowlist check and every abort path (:470-474), including `--dry-run` — a transient failure silently burns the user's one authorization. Consume it at the `can_flash` decision point instead.
+- `detect_esp_chip` returns the *configured* chip when esptool output is unparseable and `TARGET_CHIP` is set (:235-239) — a configured value should constrain detection, not substitute for it.
+- Malformed env values crash the run before any status is written (`int(...)`/`float(...)` at :56, :466, :469) — parse defensively like `env_bool` does.
+- No re-detect immediately before flashing after a fetch/compile that can take ~15 minutes; and the up-to-date decision is exact string equality on the version (:613), so any format drift turns every replug under `AUTO_UPGRADE=true` into a full reflash.
+- `update_firmware.sh --profile` is used unsanitized in paths/URLs (:99-105) — whitelist or `basename` it.
+
+Shared helpers:
+- `write_json_atomic` and `write_config_keys` use a shared `.tmp` filename (onstep_common.py:51-63) — concurrent writers can publish a torn file. `publish_symlink` already does this right with a PID-suffixed tmp; copy that pattern. Neither helper fsyncs, so a power cut can still lose the rename on SD (low impact: state is advisory, config regenerates with safe defaults).
+
+Install / update:
+- A venv that fails the health probe is `rm -rf`'d before its replacement exists (install.sh ~203-232) — at an offline field site that leaves webui/camera dead until an online install succeeds. Build `venv.new` alongside and swap on success.
+- install.sh takes no lock; a manual setup.sh run can interleave with the timer's install or a flashing session (the updater checks the provision lock; install.sh ignores it).
+- pip runs as root, unattended, with range pins and no hashes — and `requirements.txt` contains only `esptool`/`pyserial` ranges (see also the camera deps note below).
+- setup.sh trusts an existing clone's origin (~60-65); the updater does `remote set-url` from config first — mirror that one line.
+- Nginx overlay fast-path exits 0 without `nginx -t` when the include is present and status says "attached" (configure_nginx_overlay.sh ~80-88) — an interrupted earlier run can leave an invalid config that every later run reports as fine, plus an orphaned `.onstep.bak`. The script also has no locking and uses a fixed backup name while install.sh's apt Post-Invoke hook can run it concurrently.
+- The apt Post-Invoke hook is installed only if `/etc/nginx` existed at install time, and persists even if all AstroDrive timers are later disabled.
+
+Web UI:
+- Wi-Fi passwords travel on process command lines (onstep_webui.py:985-990; `nmcli` argv in setup_hotspot.sh:58,69-70) — readable via `/proc/<pid>/cmdline` while they run. Pass via environment/stdin.
+- `setup_hotspot.sh:6` prints a worked-example password (`clearSkies2026`) in its usage header — users copy examples verbatim; that is a de facto known default. Use an obvious placeholder. (The script itself has no default and refuses <8 chars — good.)
+- Bare `ThreadingHTTPServer` with no socket timeout or connection cap — a LAN client can slow-loris the UI on a 1GB Pi. (Body cap 32KB and the 4s status cache already exist.)
+- Unauthenticated status includes `token_file_error` (:637) — tells a LAN caller the token file is broken. Probably a deliberate UX trade-off; flagging it consciously.
+
+Camera:
+- fixed_ref accumulates in float32 (~514-516): past ~10⁴–10⁵ frames the per-frame increment falls below the float32 ulp of bright pixels and the mean progressively freezes on hours-long sessions; sigma-clipping also substitutes the mean into clipped pixels, biasing `m2` downward so the clip threshold tightens in a feedback loop (~573-578). Accumulate in float64 (≈7.4MB at 640×480×3 — affordable under MemoryMax=350M) and update `m2` from a Winsorised delta.
+- The NumPy `phase_correlate` fallback claims sub-pixel refinement in its comment (~248) but returns integer shifts only (:235-253) — and it is dead code in production anyway, since the daemon exits at startup without cv2 (:799-804). Implement the refinement or fix the comment.
+- No processing-rate throttle: every frame, including rejected ones, gets grading, alignment, warp, and a full-frame stretch, because every `process_frame` return path calls `_render_current` (:590-599, :964-983). At lunar/planetary frame rates this saturates a Pi 3B core that INDI also needs. Cap the processing rate, cache the Hanning window (re-allocated per call, ~230), skip the stretch for non-previewed frames.
+- Settings from the JSON channel are applied with no type/range validation (`update_settings` :377-383): `"keep_pct": "high"` crashes the daemon (see R11), `sigma_clip <= 0` silently freezes a fixed_ref stack, and any unknown `mode` string silently selects fixed_ref (~561). Validate/coerce per key.
+- The requested format is never read back after open (:955-958): if the camera delivers MJPEG instead of YUYV, OpenCV silently decodes it, defeating the stated "MJPEG artefacts never poison grading" design with no warning. And if `/dev/astrocam` is missing, the daemon grabs the lowest `/dev/video*` node (:749-758), which may be an unrelated device. Read back FOURCC/size, log mismatches, log the resolved device identity on fallback.
+- `camera-status.json` is written to SD-backed `/var/lib` every ~1.5s (~40–55k writes/day) despite the module docstring's "zero per-frame SD card writes" — move it under `/run/onstep-camera` (tmpfs, already in `ReadWritePaths`) or throttle it.
+- `drift_limit_reached` latches until reset (~565-571) even if the mount drifts back inside the limit, and `drift_x_px` means "cumulative" in dynamic mode but "current offset" in fixed_ref — document or rename.
+- The star detector's count includes only stars with a valid FWHM (:139-192), so a frame full of very blurred stars reads as "no stars" and feeds the cloud logic (R9) — return peak count and valid-FWHM count separately.
+- The quality floor can prevent a stack from ever starting on low-texture targets (:417-424, :502-505): with keep 100% and Laplacian variance under the floor, every frame is `rejected_quality` and the reference is never acquired, while the preview keeps showing the live frame and masks it. Exempt reference acquisition from the floor.
+- Camera dependencies are declared nowhere: `requirements.txt` is firmware-only (esptool, pyserial); numpy/OpenCV/Pillow arrive via apt at install time with no minimum versions recorded. Add a `requirements-camera.txt` or document the assumed minimums.
+
+CI / release:
+- The weekly firmware build's comment claims it tests "latest upstream" (build-firmware.yml:9-11) but scheduled runs use the pinned `firmware/onstepx.ref` — the pin itself is solid (full SHA `83857454…`, verified present); fix the comment or pass `main` on schedule without publishing.
+- No `v1.3.0` tag or release exists; VERSION and CHANGELOG agree with each other, but installs track `main` (setup.sh fetches `origin/main`), so "1.3.0" is not a reproducible install point. Tag versions, or note in the CHANGELOG that installs track main.
+- CI tests Python 3.12 only (lint.yml:19) while the shipped target (Raspberry Pi OS trixie) runs Python 3.13. Add 3.13 to the matrix.
+- `onstep_provision.py`, `onstep_common.py`, and `probe_onstep.py` are only `py_compile`d in CI, never imported or run (lint.yml:33-40) — a broken import or module-level NameError passes. The file list is also hardcoded; glob it so a future seventh `.py` is covered.
+- No action is SHA-pinned in any workflow, while two workflows run with `contents: write`; CI's arduino-cli floats via `setup-arduino-cli@v2` even though the on-Pi path pins v1.6.0 with SHA-256 (install.sh ~78-113 — verified, good). lint.yml has no `permissions:` block. The Arduino cache key is a frozen constant string in both build workflows.
+- build-firmware's path filter omits `requirements.txt` and `scripts/` (build-firmware.yml:5-8), so toolchain-only changes neither rebuild on push nor (per R14) republish weekly.
+- The base Pi image is downloaded with no checksum verification (build-pi-image.yml:94-100) and then chrooted into as root and published. Add a `base_image_sha256` input and verify before decompression.
+- Pi-image release notes promise the Astroberry drawer at `astroberry.local` (:229) but the default base image is plain Raspberry Pi OS (:10), where AstroDrive is standalone on :8090 — README gets this distinction right; make the notes conditional.
+- `.gitignore:9-10` (`firmware/prebuilt/*.bin`, `firmware/prebuilt/manifest.json`) does not match the per-profile subdirectories build.sh actually writes — locally built binaries are not ignored. Change to `firmware/prebuilt/**`.
+- The firmware-build job is duplicated almost step-for-step in build-firmware.yml and build-pi-image.yml; they will drift. Extract a reusable workflow.
+- README's single "Wait 3–5 minutes" install estimate (:47) now silently includes the default camera stack (apt v4l-utils + python3-opencv + venv on a Pi 3B), and nothing anywhere measures install time or size. (Open note 1 from my v1.3.0 draft — still open.) Measure a real Pi 3B install with and without camera and publish both numbers.
+
+### Nits
+
+- The nginx overlay snippet disables gzip for the *entire* Astroberry server block and injects its script into every app's HTML, not just `/onstep/` (onstep-astroberry-overlay.conf ~21-24).
+- `webui.token` permissions (0640) are set only at creation; a later loosened mode is never repaired. setup.sh prints the token/PIN to stdout (by design; it lands in scrollback/logs).
+- `configure_indi_defaults.sh` scans every `/home/*` and `chown -R`s each user's `~/.indi` on every install/update — broader than needed, though guarded.
+- `astrodrive-update.timer` (`OnBootSec=5min` + `Persistent=true`) means a usually-off Pi updates ~5 min after boot; the INDI-active gate defers it during a session, but a dusk boot can still restart the webui during setup. Design trade-off, noted.
+- `probe_onstep.py:78-82`: the standalone CLI returns on the first baud's `SerialException` instead of trying the remaining bauds (the library path handles this correctly).
+- `onstep_provision.py:352` logs "Pulling pinned upstream OnStepX", but `firmware/build.sh:20-24` floats to `main` if the ref file is absent in the *installed* tree (it is present in the repo — verified). Align the log line with the fallback.
+- `firmware/build.sh:182` hardcodes `--flash_size 4MB` in `merge_bin` regardless of profile; ESP32 profile FQBN says `FlashMode=qio` while `FLASH_MODE="dio"` is what merge uses on the fallback path — the two should agree.
+- `_gaussian_blur_3x3` is 5×5 on the cv2 path and a true 3×3 on the NumPy path (onstep_camera.py ~132) — same name, different blur, different Laplacian scores per environment.
+- Camera counters don't reconcile across resets (`frames_captured` zeroes on bump resets; settle-skip frames count, dark-collection frames don't); two saves within one second overwrite each other (1s-resolution filenames, ~871-873); a config restored with an older mtime is ignored forever (~834).
+- lint.yml's inline-JS check extracts only the first bare `<script>` block (:52) — verified that index.html currently has exactly one, so coverage is complete today, but a second block or a `type=` attribute would silently escape it. The web UI smoke test also uses a fixed `time.sleep(0.8)` before its first request (:92) — a flake risk on slow runners; poll the port instead. Test deps (`numpy pillow`, :43) are unpinned.
+- Both release workflows tag by minute (`%Y.%m.%d-%H%M`); two publishes in the same minute collide. Pi-image cleanup can bake the CI runner's `resolv.conf` into the image if the original wasn't a regular file (first boot regenerates it; low impact).
+- `platformio.ini` defines only an ESP8266 env while `firmware/Config.h` symlinks to the ESP32 profile's config, and its comments describe a layout the repo no longer uses — the optional path is honestly labelled but starts an ESP8266 builder from the ESP32 config.
+
+### Test coverage gaps
+
+- `tests/test_camera_stacker.py`: the test named for sigma-clipping never exercises it (the only post-warmup frame is rejected by the drift limit before the clip code runs; `m2` is never asserted). Binning is never exercised (all frames 200×160, factor 1.0; production runs factor 2/4/8). The NumPy fallbacks, the daemon itself (arbitration, reconnect, format negotiation, command files, status), mode switching, and >200-frame long sessions are all untested. The Laplacian metric is only reached implicitly, so R10's scale-mixing is untested too.
+- CI never imports the provisioning modules (see Minor/CI), and nothing executes install.sh (R16).
+
+### Checked and solid
+
+- M1/M2/M3 verified in place: token auth with `secrets.token_hex(16)` at 0640, created only if absent; setup.sh fails loudly when the firmware download fails *or* zero `.bin` files are cached; the M3 migration disarms legacy `AUTO_FLASH="true"` when allowlists are empty, while an explicit `--enable-auto-flash` still wins.
+- Web UI auth structure: a single `_require_auth()` gate at the top of `do_POST` covers every mutating route; sensitive GETs check individually. Unauthenticated `/api/status` redaction verified field by field (:634-643). `GITHUB_REPO` is not HTTP-writable (:103-113) and non-allowlisted keys are rejected. Zero `shell=True`/`os.system`/`eval` in the web UI; every subprocess is an argv list. Capture downloads have a strict regex plus a resolve-and-containment check; camera inputs are range/allowlist-validated; Wi-Fi strings reject control characters; the hotspot is WPA2-PSK, never open, and refuses to run without a password.
+- Provisioning: SHA-256 of the cached .bin is recomputed on *every* run before flashing (:279-283), and `update_firmware.sh` verifies downloads before installing, with a bin-then-manifest order that fails safe if interrupted. Missing firmware produces an explicit `missing_firmware` status, never a success claim. The allowlist runs before any esptool invocation and fails closed; the global flock serializes provisioning (lock file never unlinked, so no flock/unlink race); the INDI holder scan resolves `/proc/*/fd` symlinks properly; the probe is non-disruptive (DTR/RTS forced false, `:GVP#` must answer with an On-Step prefix); post-flash verification runs before `/dev/onstep` is published, and symlink publication is atomic. Dry-run is honest on every path.
+- Camera: memory is genuinely bounded (deques capped at 200/60/20; stacker state ≈11MB worst case at 720p against MemoryMax=350M; no per-frame allocations retained). The Welford core math and the phase-correlation sign conventions are correct, and the drift test's assertions corroborate the signs. Dark-frame lifecycle, tmpfs preview via tmp+rename, pre-open INDI arbitration with `busy_indi`/`disconnected` idle states, read-failure reopen, and the service/udev hardening are all solid.
+- CI: the OnStepX pin is a full commit SHA and build.sh fetches exactly it; Arduino cores are version-pinned via `CORE_SPEC` in both profiles and the cache key matches; manifests carry profile/chip/FQBN/offset/version/commit/fingerprint/core/SHA-256; the lint smoke test is unusually thorough — it boots the real web UI and regression-tests the M1 fixes (401s, redaction, traversal rejection, `GITHUB_REPO` mutation rejected). No `pull_request_target`, no `curl | bash` inside CI, no secrets beyond `GITHUB_TOKEN`. The Pi-image workflow is dispatch-only with safe defaults (`enable_auto_flash=false`) and an `if: always()` cleanup step. VERSION ↔ CHANGELOG ↔ LICENSE are consistent, and install.sh's flags match every invocation the workflows and README make.
+
+### Could not verify
+
+- Whether any workflow run is actually green at HEAD, including the two CI run IDs cited in the v1.3.0 entry — no run-status visibility from here.
+- Whether `git fetch origin <arbitrary-SHA>` succeeds against this repo (R3's rollback depends on it).
+- esptool's external behaviour: `--chip` cross-family rejection (R6's backstop) and the default `--after` reboot that two symlink-publish paths rely on.
+- Actual .bin sizes, so whether the 120s fallback-baud flash budget (R5) is merely tight or actually insufficient.
+- Real Pi 3B install time/disk cost with the camera stack (nothing in the repo measures it), and the deployed on-device state (unit files, token permissions on an installed Pi) vs the repo copies.
+- `firmware/profiles/*/profile.env` was cross-checked only for the FQBN/FLASH_MODE mismatch noted above; a full per-profile audit was not done.
+
+### Suggested fix order
+
+1. **R1** (the only confirmed path from untrusted input to root), then **R13** (breaks the firmware channel fleet-wide on the next Pi-image publish).
+2. **R4 + R5** together (timeout budgets and timeout honesty — same "field failure must be visible and survivable" theme), then **R2 + R3** (update atomicity).
+3. **R9 + R11** (the two ways a long camera stack silently dies), **R6** (one-line validation, closes the wrong-board gap in-repo).
+4. Everything else in listed order. Happy to re-verify fixes commit by commit, same as the v1.2.0 round.
+
+— Bingo
