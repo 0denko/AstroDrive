@@ -2,7 +2,7 @@
 # Fetches the latest verified OnStepX firmware (.bin + manifest.json) from GitHub Releases.
 #
 # Usage:
-#   ./scripts/update_firmware.sh --repo owner/astro-pi-onstep-autoprovision --profile nodemcu-esp8266-tmc2209s
+#   ./scripts/update_firmware.sh --repo 0denko/AstroDrive --profile nodemcu-esp32-tmc2208s
 #   ./scripts/update_firmware.sh --all   # uses GITHUB_REPO from /etc/onstep-autoprovision/config.env
 set -euo pipefail
 
@@ -119,11 +119,11 @@ for a in data.get("assets", []):
 }
 
 if [ "${UPDATE_ALL}" = "true" ]; then
-  for p in nodemcu-esp8266-tmc2209s nodemcu-esp32-tmc2209s; do
+  for p in nodemcu-esp32-tmc2208s nodemcu-esp8266-tmc2208s; do
     fetch_profile_from_release "${p}" || true
   done
 else
-  fetch_profile_from_release "${PROFILE:-nodemcu-esp8266-tmc2209s}"
+  fetch_profile_from_release "${PROFILE:-nodemcu-esp32-tmc2208s}"
 fi
 
 rm -f /tmp/onstep_release.json

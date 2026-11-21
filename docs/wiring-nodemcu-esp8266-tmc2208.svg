@@ -1,0 +1,242 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 720" width="1180" height="720" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <style>
+      .bg { fill: #0d1117; }
+      .card { fill: #161b22; stroke: #30363d; stroke-width: 1.5; rx: 10; }
+      .subcard { fill: #0d1117; stroke: #30363d; stroke-width: 1.2; rx: 6; }
+      .title { fill: #f0f6fc; font-size: 20px; font-weight: 700; }
+      .subtitle { fill: #8b949e; font-size: 12.5px; }
+      .box-title { fill: #f0f6fc; font-size: 13.5px; font-weight: 700; }
+      .box-sub { fill: #8b949e; font-size: 10.5px; }
+      .pin-l { fill: #c9d1d9; font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; text-anchor: start; }
+      .pin-r { fill: #c9d1d9; font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; text-anchor: end; }
+      .pin-c { fill: #c9d1d9; font-size: 10.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; text-anchor: middle; }
+      .note { fill: #e6edf3; font-size: 11px; }
+      .warn { fill: #ffa657; font-size: 11px; font-weight: 600; }
+      .danger { fill: #ff7b72; font-size: 11px; font-weight: 600; }
+      .ok { fill: #7ee787; font-size: 11px; font-weight: 600; }
+      .w-12v { stroke: #f85149; stroke-width: 2.6; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+      .w-3v3 { stroke: #d29922; stroke-width: 2.2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+      .w-gnd { stroke: #6e7681; stroke-width: 2.2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+      .w-ra { stroke: #58a6ff; stroke-width: 2.2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+      .w-dec { stroke: #bc8cff; stroke-width: 2.2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+      .w-usb { stroke: #3fb950; stroke-width: 2.6; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+      .w-coil1 { stroke: #39c5cf; stroke-width: 2.2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+      .w-coil2 { stroke: #f778ba; stroke-width: 2.2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+      .dot-12v { fill: #f85149; }
+      .dot-3v3 { fill: #d29922; }
+      .dot-gnd { fill: #8b949e; }
+      .dot-ra { fill: #58a6ff; }
+      .dot-dec { fill: #bc8cff; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1180" height="720"/>
+
+  <!-- Header -->
+  <text x="28" y="36" class="title">AstroDrive Wiring Diagram — Amica NodeMCU (ESP8266) + 2× TMC2208 (Backup Controller)</text>
+  <text x="28" y="56" class="subtitle">OnStepX profile: nodemcu-esp8266-tmc2208s (TMC2208S, 160 MHz, PULSE, RF modem sleep, 9600 baud) · 144:1 worm → 2560.0 steps/deg</text>
+
+  <!-- Legend -->
+  <g transform="translate(28, 70)">
+    <line x1="0" y1="8" x2="22" y2="8" class="w-12v"/><text x="28" y="12" class="box-sub">12 V Motor (VM)</text>
+    <line x1="130" y1="8" x2="152" y2="8" class="w-3v3"/><text x="158" y="12" class="box-sub">3.3 V Logic (VIO)</text>
+    <line x1="270" y1="8" x2="292" y2="8" class="w-gnd"/><text x="298" y="12" class="box-sub">Common GND</text>
+    <line x1="395" y1="8" x2="417" y2="8" class="w-ra"/><text x="423" y="12" class="box-sub">RA STEP/DIR/EN</text>
+    <line x1="535" y1="8" x2="557" y2="8" class="w-dec"/><text x="563" y="12" class="box-sub">DEC STEP/DIR/EN</text>
+    <line x1="680" y1="8" x2="702" y2="8" class="w-usb"/><text x="708" y="12" class="box-sub">USB Serial (9600)</text>
+    <line x1="825" y1="8" x2="847" y2="8" class="w-coil1"/><text x="853" y="12" class="box-sub">Motor Coil 1 (M1A/M1B)</text>
+    <line x1="995" y1="8" x2="1017" y2="8" class="w-coil2"/><text x="1023" y="12" class="box-sub">Motor Coil 2 (M2A/M2B)</text>
+  </g>
+
+  <!-- ==================== 12V POWER & BUCK ==================== -->
+  <rect x="28" y="102" width="230" height="156" class="card"/>
+  <text x="42" y="124" class="box-title">12 V DC Power &amp; Protection</text>
+  <text x="42" y="140" class="box-sub">12 V ≥ 4 A PSU → Inline Fuse (4 A)</text>
+  <rect x="42" y="152" width="202" height="42" class="subcard"/>
+  <text x="52" y="170" class="danger">+12 V Fused Rail → VM (RA &amp; DEC)</text>
+  <text x="52" y="185" class="box-sub">Add 100 µF ≥25 V cap across VM–GND each</text>
+  <rect x="42" y="202" width="202" height="44" class="subcard"/>
+  <text x="52" y="220" class="warn">LM2596S Buck (trim to 5.1 V unloaded)</text>
+  <text x="52" y="236" class="box-sub">Feeds Relay VCC / accessories</text>
+
+  <!-- ==================== RASPBERRY PI ==================== -->
+  <rect x="28" y="280" width="230" height="122" class="card"/>
+  <text x="42" y="303" class="box-title">Raspberry Pi (Astroberry OS v3)</text>
+  <text x="42" y="320" class="box-sub">Dedicated 5.1 V 2.5 A supply recommended</text>
+  <text x="42" y="340" class="ok">• indi_lx200_OnStep → /dev/onstep</text>
+  <text x="42" y="357" class="box-sub">• Auto-detects ESP8266 via esptool</text>
+  <text x="42" y="374" class="box-sub">• Share Pi GND with system Ground Bus</text>
+  <text x="42" y="391" class="box-sub">• CP2102 USB bridge (10c4:ea60)</text>
+
+  <!-- ==================== NODEMCU ESP8266 ==================== -->
+  <rect x="308" y="148" width="228" height="354" class="card"/>
+  <rect x="318" y="158" width="208" height="36" fill="#272116" stroke="#d29922" stroke-width="1" rx="6"/>
+  <text x="422" y="175" class="box-title" text-anchor="middle">Amica NodeMCU v2 (ESP8266)</text>
+  <text x="422" y="189" class="box-sub" text-anchor="middle">Backup MCU · 160 MHz · Wi-Fi Off</text>
+
+  <g transform="translate(308, 214)">
+    <rect x="-6" y="108" width="12" height="34" fill="#238636" rx="2"/>
+    <text x="14" y="129" class="pin-l">USB (CP2102)</text>
+
+    <text x="214" y="12" class="pin-r">3V3 (VIO Rail)</text><circle cx="228" cy="8" r="4" class="dot-3v3"/>
+    <text x="214" y="36" class="pin-r">GND (Logic)</text><circle cx="228" cy="32" r="4" class="dot-gnd"/>
+
+    <line x1="14" y1="50" x2="214" y2="50" stroke="#30363d" stroke-width="1"/>
+    <text x="14" y="68" class="box-sub">RA Axis (Axis 1)</text>
+    <text x="214" y="88" class="pin-r">D1 / GPIO5 (RA STEP)</text><circle cx="228" cy="84" r="4" class="dot-ra"/>
+    <text x="214" y="112" class="pin-r">D2 / GPIO4 (RA DIR)</text><circle cx="228" cy="108" r="4" class="dot-ra"/>
+    <text x="214" y="136" class="pin-r" fill="#ffa657">D0 / GPIO16 (RA EN*)</text><circle cx="228" cy="132" r="4" class="dot-ra"/>
+
+    <line x1="14" y1="152" x2="214" y2="152" stroke="#30363d" stroke-width="1"/>
+    <text x="14" y="170" class="box-sub">DEC Axis (Axis 2)</text>
+    <text x="214" y="190" class="pin-r">D5 / GPIO14 (DEC STEP)</text><circle cx="228" cy="186" r="4" class="dot-dec"/>
+    <text x="214" y="214" class="pin-r">D6 / GPIO12 (DEC DIR)</text><circle cx="228" cy="210" r="4" class="dot-dec"/>
+    <text x="214" y="238" class="pin-r">D7 / GPIO13 (DEC EN)</text><circle cx="228" cy="234" r="4" class="dot-dec"/>
+
+    <line x1="14" y1="252" x2="214" y2="252" stroke="#30363d" stroke-width="1"/>
+    <text x="14" y="269" class="warn">Keep free: D3(0), D4(2), D8(15)</text>
+  </g>
+
+  <!-- USB Cable Pi -> NodeMCU -->
+  <path d="M 258 339 L 302 339" class="w-usb"/>
+  <text x="280" y="331" class="pin-c" fill="#7ee787">USB</text>
+
+  <!-- ==================== TMC2208 RA DRIVER ==================== -->
+  <rect x="650" y="102" width="240" height="252" class="card"/>
+  <rect x="660" y="110" width="220" height="32" fill="#17253a" stroke="#58a6ff" stroke-width="1" rx="5"/>
+  <text x="770" y="126" class="box-title" text-anchor="middle">RA Driver — FYSETC TMC2208 V1.0</text>
+  <text x="770" y="138" class="box-sub" text-anchor="middle">Silkscreen upright · Vref ≈ 0.35 V (max 0.71 V)</text>
+
+  <text x="662" y="155" class="box-sub">Control Side (Right header)</text>
+  <text x="878" y="155" class="box-sub" text-anchor="end">Power/Motor (Left header)</text>
+
+  <g transform="translate(650, 172)">
+    <circle cx="0" cy="0" r="4" class="dot-ra"/><text x="10" y="4" class="pin-l">DIR</text>
+    <circle cx="0" cy="24" r="4" class="dot-ra"/><text x="10" y="28" class="pin-l">STEP</text>
+    <circle cx="0" cy="48" r="4" class="dot-gnd"/><text x="10" y="52" class="pin-l">CLK → GND</text>
+    <circle cx="0" cy="72" r="4" class="dot-gnd"/><text x="10" y="76" class="pin-l">PDN → GND</text>
+    <circle cx="0" cy="96" r="4" fill="#30363d"/><text x="10" y="100" class="pin-l" fill="#6e7681">NC (open)</text>
+    <circle cx="0" cy="120" r="4" class="dot-3v3"/><text x="10" y="124" class="pin-l">MS2 → VIO (1/16)</text>
+    <circle cx="0" cy="144" r="4" class="dot-3v3"/><text x="10" y="148" class="pin-l">MS1 → VIO (1/16)</text>
+    <circle cx="0" cy="168" r="4" class="dot-ra"/><text x="10" y="172" class="pin-l" fill="#ffa657">EN (MANDATORY 10k→VIO)</text>
+  </g>
+  <g transform="translate(890, 172)">
+    <text x="-10" y="4" class="pin-r">GND (logic)</text><circle cx="0" cy="0" r="4" class="dot-gnd"/>
+    <text x="-10" y="28" class="pin-r">VIO (3.3 V)</text><circle cx="0" cy="24" r="4" class="dot-3v3"/>
+    <text x="-10" y="52" class="pin-r" fill="#f778ba">M2B (Coil 2)</text><circle cx="0" cy="48" r="4" fill="#f778ba"/>
+    <text x="-10" y="76" class="pin-r" fill="#f778ba">M2A (Coil 2)</text><circle cx="0" cy="72" r="4" fill="#f778ba"/>
+    <text x="-10" y="100" class="pin-r" fill="#39c5cf">M1A (Coil 1)</text><circle cx="0" cy="96" r="4" fill="#39c5cf"/>
+    <text x="-10" y="124" class="pin-r" fill="#39c5cf">M1B (Coil 1)</text><circle cx="0" cy="120" r="4" fill="#39c5cf"/>
+    <text x="-10" y="148" class="pin-r">GND (power)</text><circle cx="0" cy="144" r="4" class="dot-gnd"/>
+    <text x="-10" y="172" class="pin-r" fill="#ff7b72">VM (12 V)</text><circle cx="0" cy="168" r="4" class="dot-12v"/>
+  </g>
+  <circle cx="770" cy="256" r="14" fill="#21262d" stroke="#d29922" stroke-width="1.5"/>
+  <line x1="762" y1="256" x2="778" y2="256" stroke="#d29922" stroke-width="1.5"/>
+  <line x1="770" y1="248" x2="770" y2="264" stroke="#d29922" stroke-width="1.5"/>
+  <text x="770" y="284" class="pin-c" fill="#d29922">Vref</text>
+
+  <!-- ==================== TMC2208 DEC DRIVER ==================== -->
+  <rect x="650" y="376" width="240" height="252" class="card"/>
+  <rect x="660" y="384" width="220" height="32" fill="#251a38" stroke="#bc8cff" stroke-width="1" rx="5"/>
+  <text x="770" y="400" class="box-title" text-anchor="middle">DEC Driver — FYSETC TMC2208 V1.0</text>
+  <text x="770" y="412" class="box-sub" text-anchor="middle">Silkscreen upright · Vref ≈ 0.35 V (max 0.71 V)</text>
+
+  <text x="662" y="429" class="box-sub">Control Side (Right header)</text>
+  <text x="878" y="429" class="box-sub" text-anchor="end">Power/Motor (Left header)</text>
+
+  <g transform="translate(650, 446)">
+    <circle cx="0" cy="0" r="4" class="dot-dec"/><text x="10" y="4" class="pin-l">DIR</text>
+    <circle cx="0" cy="24" r="4" class="dot-dec"/><text x="10" y="28" class="pin-l">STEP</text>
+    <circle cx="0" cy="48" r="4" class="dot-gnd"/><text x="10" y="52" class="pin-l">CLK → GND</text>
+    <circle cx="0" cy="72" r="4" class="dot-gnd"/><text x="10" y="76" class="pin-l">PDN → GND</text>
+    <circle cx="0" cy="96" r="4" fill="#30363d"/><text x="10" y="100" class="pin-l" fill="#6e7681">NC (open)</text>
+    <circle cx="0" cy="120" r="4" class="dot-3v3"/><text x="10" y="124" class="pin-l">MS2 → VIO (1/16)</text>
+    <circle cx="0" cy="144" r="4" class="dot-3v3"/><text x="10" y="148" class="pin-l">MS1 → VIO (1/16)</text>
+    <circle cx="0" cy="168" r="4" class="dot-dec"/><text x="10" y="172" class="pin-l">EN (10kΩ → VIO)</text>
+  </g>
+  <g transform="translate(890, 446)">
+    <text x="-10" y="4" class="pin-r">GND (logic)</text><circle cx="0" cy="0" r="4" class="dot-gnd"/>
+    <text x="-10" y="28" class="pin-r">VIO (3.3 V)</text><circle cx="0" cy="24" r="4" class="dot-3v3"/>
+    <text x="-10" y="52" class="pin-r" fill="#f778ba">M2B (Coil 2)</text><circle cx="0" cy="48" r="4" fill="#f778ba"/>
+    <text x="-10" y="76" class="pin-r" fill="#f778ba">M2A (Coil 2)</text><circle cx="0" cy="72" r="4" fill="#f778ba"/>
+    <text x="-10" y="100" class="pin-r" fill="#39c5cf">M1A (Coil 1)</text><circle cx="0" cy="96" r="4" fill="#39c5cf"/>
+    <text x="-10" y="124" class="pin-r" fill="#39c5cf">M1B (Coil 1)</text><circle cx="0" cy="120" r="4" fill="#39c5cf"/>
+    <text x="-10" y="148" class="pin-r">GND (power)</text><circle cx="0" cy="144" r="4" class="dot-gnd"/>
+    <text x="-10" y="172" class="pin-r" fill="#ff7b72">VM (12 V)</text><circle cx="0" cy="168" r="4" class="dot-12v"/>
+  </g>
+  <circle cx="770" cy="530" r="14" fill="#21262d" stroke="#d29922" stroke-width="1.5"/>
+  <line x1="762" y1="530" x2="778" y2="530" stroke="#d29922" stroke-width="1.5"/>
+  <line x1="770" y1="522" x2="770" y2="538" stroke="#d29922" stroke-width="1.5"/>
+  <text x="770" y="558" class="pin-c" fill="#d29922">Vref</text>
+
+  <!-- ==================== MOTORS ==================== -->
+  <rect x="975" y="182" width="176" height="128" class="card"/>
+  <text x="1063" y="205" class="box-title" text-anchor="middle">RA Motor: 36H20HM</text>
+  <text x="1063" y="222" class="box-sub" text-anchor="middle">0.9° (400/rev) · 0.5 A · 12 Ω</text>
+  <text x="990" y="246" class="pin-l" fill="#f778ba">Coil 2 (M2B + M2A)</text>
+  <text x="990" y="274" class="pin-l" fill="#39c5cf">Coil 1 (M1A + M1B)</text>
+  <text x="1063" y="298" class="box-sub" text-anchor="middle">Check pairs w/ meter (~12 Ω)</text>
+
+  <rect x="975" y="456" width="176" height="128" class="card"/>
+  <text x="1063" y="479" class="box-title" text-anchor="middle">DEC Motor: 36H18HM</text>
+  <text x="1063" y="496" class="box-sub" text-anchor="middle">Assumed 0.9° (2560 steps/°)</text>
+  <text x="990" y="520" class="pin-l" fill="#f778ba">Coil 2 (M2B + M2A)</text>
+  <text x="990" y="548" class="pin-l" fill="#39c5cf">Coil 1 (M1A + M1B)</text>
+  <text x="1063" y="572" class="box-sub" text-anchor="middle">Never pair adjacent M2A+M1A!</text>
+
+  <!-- ==================== WIRES: NodeMCU -> RA & DEC ==================== -->
+  <path d="M 536 298 L 578 298 L 578 196 L 650 196" class="w-ra"/>
+  <path d="M 536 322 L 566 322 L 566 172 L 650 172" class="w-ra"/>
+  <path d="M 536 346 L 590 346 L 590 340 L 650 340" class="w-ra"/>
+
+  <path d="M 536 400 L 590 400 L 590 470 L 650 470" class="w-dec"/>
+  <path d="M 536 424 L 578 424 L 578 446 L 650 446" class="w-dec"/>
+  <path d="M 536 448 L 566 448 L 566 614 L 650 614" class="w-dec"/>
+
+  <!-- 3.3V VIO Bus -->
+  <path d="M 536 222 L 614 222 L 614 86 L 916 86 L 916 470 L 890 470" class="w-3v3"/>
+  <path d="M 916 196 L 890 196" class="w-3v3"/><circle cx="916" cy="196" r="3.5" class="dot-3v3"/>
+  <path d="M 614 222 L 614 590 L 650 590" class="w-3v3"/>
+  <path d="M 614 292 L 650 292" class="w-3v3"/><circle cx="614" cy="292" r="3.5" class="dot-3v3"/>
+  <path d="M 614 316 L 650 316" class="w-3v3"/><circle cx="614" cy="316" r="3.5" class="dot-3v3"/>
+  <path d="M 614 566 L 650 566" class="w-3v3"/><circle cx="614" cy="566" r="3.5" class="dot-3v3"/>
+
+  <!-- Logic GND Bus -->
+  <path d="M 536 246 L 630 246 L 630 518 L 650 518" class="w-gnd"/>
+  <path d="M 630 220 L 650 220" class="w-gnd"/><circle cx="630" cy="220" r="3.5" class="dot-gnd"/>
+  <path d="M 630 244 L 650 244" class="w-gnd"/><circle cx="630" cy="244" r="3.5" class="dot-gnd"/>
+  <path d="M 630 494 L 650 494" class="w-gnd"/><circle cx="630" cy="494" r="3.5" class="dot-gnd"/>
+  <path d="M 630 220 L 630 94 L 930 94 L 930 446 L 890 446" class="w-gnd"/>
+  <path d="M 930 172 L 890 172" class="w-gnd"/><circle cx="930" cy="172" r="3.5" class="dot-gnd"/>
+
+  <!-- 12V Motor VM Rail -->
+  <path d="M 258 170 L 284 170 L 284 646 L 946 646 L 946 340 L 890 340" class="w-12v"/>
+  <path d="M 946 614 L 890 614" class="w-12v"/><circle cx="946" cy="614" r="3.5" class="dot-12v"/>
+  <!-- Power GND Bus -->
+  <path d="M 258 242 L 274 242 L 274 660 L 958 660 L 958 316 L 890 316" class="w-gnd"/>
+  <path d="M 958 590 L 890 590" class="w-gnd"/><circle cx="958" cy="590" r="3.5" class="dot-gnd"/>
+  <path d="M 258 378 L 274 378" class="w-gnd"/><circle cx="274" cy="378" r="3.5" class="dot-gnd"/>
+  <path d="M 630 518 L 630 660" class="w-gnd"/><circle cx="630" cy="660" r="3.5" class="dot-gnd"/>
+
+  <rect x="896" y="321" width="58" height="17" fill="#2d1517" stroke="#f85149" stroke-width="1" rx="3"/>
+  <text x="925" y="333" class="pin-c" fill="#ff7b72">100 µF</text>
+  <rect x="896" y="595" width="58" height="17" fill="#2d1517" stroke="#f85149" stroke-width="1" rx="3"/>
+  <text x="925" y="607" class="pin-c" fill="#ff7b72">100 µF</text>
+
+  <!-- Motor Coil Wires -->
+  <path d="M 890 220 L 975 220" class="w-coil2"/>
+  <path d="M 890 244 L 975 244" class="w-coil2"/>
+  <path d="M 890 268 L 975 268" class="w-coil1"/>
+  <path d="M 890 292 L 975 292" class="w-coil1"/>
+
+  <path d="M 890 494 L 975 494" class="w-coil2"/>
+  <path d="M 890 518 L 975 518" class="w-coil2"/>
+  <path d="M 890 542 L 975 542" class="w-coil1"/>
+  <path d="M 890 566 L 975 566" class="w-coil1"/>
+
+  <!-- Safety bar -->
+  <rect x="28" y="672" width="1124" height="36" class="card"/>
+  <text x="42" y="694" class="warn">⚠ SAFETY:</text>
+  <text x="115" y="694" class="note">*D0/GPIO16 has an internal pull-down — 10 kΩ pull-up on RA EN → VIO is MANDATORY  |  STATUS_LED=OFF in Config.h  |  Never feed 5 V into ESP8266</text>
+</svg>

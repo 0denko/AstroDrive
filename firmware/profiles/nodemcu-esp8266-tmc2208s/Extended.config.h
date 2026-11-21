@@ -2,7 +2,7 @@
  * AstroDrive — OnStepX Extended Configuration for NodeMCU ESP8266 (PINMAP OFF)
  *
  * Explicitly binds SERIAL_A to UART0 (`Serial`) because PINMAP is OFF, and sets
- * active-LOW enable polarity for TMC2209 StepSticks.
+ * active-LOW enable polarity for TMC2208 StepSticks.
  * ---------------------------------------------------------------------------------------------------------------------------------
  */
 
@@ -10,7 +10,7 @@
   #define SERIAL_A                    Serial
 #endif
 
-// Active-LOW enable polarity for TMC2209 StepStick carriers
+// Active-LOW enable polarity for TMC2208 StepStick carriers
 #ifndef AXIS1_ENABLE_STATE
   #define AXIS1_ENABLE_STATE          LOW
 #endif

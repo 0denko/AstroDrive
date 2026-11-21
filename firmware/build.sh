@@ -7,10 +7,10 @@
 #   <out-dir>/<profile>/manifest.json   (chip, flash_offset, version, SHA-256)
 #
 # Usage:
-#   ./firmware/build.sh                                    # Default: nodemcu-esp8266-tmc2209s
-#   ./firmware/build.sh --profile nodemcu-esp32-tmc2209s   # Specific profile
+#   ./firmware/build.sh                                    # Default: nodemcu-esp32-tmc2208s
+#   ./firmware/build.sh --profile nodemcu-esp8266-tmc2208s # Specific profile
 #   ./firmware/build.sh --all                              # Build every profile
-#   ./firmware/build.sh --profile nodemcu-esp8266-tmc2209s --out-dir /opt/onstep-autoprovision/firmware
+#   ./firmware/build.sh --profile nodemcu-esp32-tmc2208s --out-dir /opt/onstep-autoprovision/firmware
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -211,5 +211,5 @@ if [ "${BUILD_ALL}" = "true" ]; then
     [ -f "${d}/profile.env" ] && build_profile "$(basename "${d}")"
   done
 else
-  build_profile "${PROFILE:-nodemcu-esp8266-tmc2209s}"
+  build_profile "${PROFILE:-nodemcu-esp32-tmc2208s}"
 fi

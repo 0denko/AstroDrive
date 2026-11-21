@@ -1,1 +1,1 @@
-profiles/nodemcu-esp8266-tmc2209s/Config.h
+profiles/nodemcu-esp32-tmc2208s/Config.h

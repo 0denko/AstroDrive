@@ -11,7 +11,7 @@ Supports ANY random NodeMCU board (ESP8266 or ESP32):
      - If already running OnStepX and no upgrade required -> publish /dev/onstep & exit.
   5. If blank / non-OnStep (or upgrade requested):
      - Auto-detect exact MCU silicon via `esptool --chip auto chip_id` (esp8266 vs esp32).
-     - Select best-fitting profile (`nodemcu-esp8266-tmc2209s` or `nodemcu-esp32-tmc2209s`).
+     - Select best-fitting profile (`nodemcu-esp8266-tmc2208s` or `nodemcu-esp32-tmc2208s`).
      - Resolve firmware via 3 tiers:
          Tier 1: Online GitHub Releases fetch (`update_firmware.sh`) if online & configured.
          Tier 2: Verified local cache (`/opt/onstep-autoprovision/firmware/<profile>/`).
@@ -44,8 +44,8 @@ LOG = logging.getLogger("onstep-autoprovision")
 LOCK_PATH = Path("/run/lock/onstep-provision.lock")
 
 DEFAULT_CHIP_PROFILE_MAP = {
-    "esp8266": "nodemcu-esp8266-tmc2209s",
-    "esp32": "nodemcu-esp32-tmc2209s",
+    "esp8266": "nodemcu-esp8266-tmc2208s",
+    "esp32": "nodemcu-esp32-tmc2208s",
 }
 
 

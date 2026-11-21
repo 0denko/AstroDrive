@@ -1,1 +1,1 @@
-profiles/nodemcu-esp8266-tmc2209s/Extended.config.h
+profiles/nodemcu-esp32-tmc2208s/Extended.config.h

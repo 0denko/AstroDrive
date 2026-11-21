@@ -1,6 +1,6 @@
 # AstroDrive
 
-Automated **OnStepX** firmware provisioning, **Astroberry OS v3.2+ Web UI overlay**, and **INDI (`indi_lx200_OnStep`)** integration for a Raspberry Pi telescope mount controller driving **NodeMCU ESP8266** (or **ESP32-WROOM**) + **2× TMC2209** stepper drivers.
+Automated **OnStepX** firmware provisioning, **Astroberry OS v3.2+ Web UI overlay**, and **INDI (`indi_lx200_OnStep`)** integration for a Raspberry Pi telescope mount controller driving **ESP32-WROOM** (primary) or **NodeMCU ESP8266** (backup) + **2× silent TMC2208** stepper drivers.
 
 > Detailed motor specs, LM2596S 5.1 V cable-drop measurements, undervoltage diagnostics, power sequencing, and wire-by-wire build checklists live in **[`HARDWARE.md`](HARDWARE.md)**.
 
@@ -10,22 +10,22 @@ Automated **OnStepX** firmware provisioning, **Astroberry OS v3.2+ Web UI overla
 
 To eliminate `udev` timeouts and prevent serial-port races with `indi_lx200_OnStep`, `ModemManager`, and `gpsd`, device readiness is split into two stages:
 
-1. **`udev`** (`udev/99-onstep-nodemcu.rules`) detects CP2102 (`10c4:ea60`) or CH340 (`1a86:7523`) NodeMCU boards, creates `/dev/onstep-raw`, blocks `ModemManager` (`ID_MM_DEVICE_IGNORE=1`), and triggers `onstep-autoprovision@ttyUSBx.service`.
-2. **`systemd` + Python** (`scripts/onstep_provision.py`) acquires an exclusive `flock`, verifies no active INDI session holds the port, probes LX200 `:GVP#` / `:GVN#` without triggering DTR/RTS auto-reset, auto-detects any blank NodeMCU's MCU silicon (`esp8266` vs `esp32`), fetches or live-compiles the matching OnStepX `.bin`, flashes & verifies it, and **only then atomically publishes `/dev/onstep`** for `indi_lx200_OnStep`.
+1. **`udev`** (`udev/99-onstep-nodemcu.rules`) detects CP2102 (`10c4:ea60`) or CH340 (`1a86:7523`) NodeMCU / ESP32 boards, creates `/dev/onstep-raw`, blocks `ModemManager` (`ID_MM_DEVICE_IGNORE=1`), and triggers `onstep-autoprovision@ttyUSBx.service`.
+2. **`systemd` + Python** (`scripts/onstep_provision.py`) acquires an exclusive `flock`, verifies no active INDI session holds the port, probes LX200 `:GVP#` / `:GVN#` without triggering DTR/RTS auto-reset, auto-detects any blank board's MCU silicon (`esp32` vs `esp8266`), fetches or live-compiles the matching OnStepX `.bin`, flashes & verifies it, and **only then atomically publishes `/dev/onstep`** for `indi_lx200_OnStep`.
 
 ```mermaid
 flowchart LR
-    subgraph MCU["NodeMCU ESP8266 or ESP32-WROOM"]
+    subgraph MCU["ESP32-WROOM or NodeMCU ESP8266"]
         USB["CP2102 (10c4:ea60)\nor CH340 (1a86:7523)"]
         FW["OnStepX (PINMAP OFF)\nUART0 @ 9600 baud"]
-        DRV["2× TMC2209 StepSticks\n(TMC2209S StealthChop2\n1/16 -> 1/256 MicroPlyer)"]
+        DRV["2× TMC2208 StepSticks\n(TMC2208S StealthChop2\n1/16 -> 1/256 MicroPlyer)"]
         USB <--> FW --> DRV
     end
 
     subgraph RPI["Raspberry Pi (Astroberry OS v3.2+ / RPi OS 64-bit)"]
         UDEV["udev\n99-onstep-nodemcu.rules\n(/dev/onstep-raw)"]
         SVC["systemd oneshot\nonstep-autoprovision@.service"]
-        PROV["onstep_provision.py\n• flock + FD check\n• Auto chip detect (esp8266/esp32)\n• 3-tier fetch / live compile\n• esptool.py + SHA-256"]
+        PROV["onstep_provision.py\n• flock + FD check\n• Auto chip detect (esp32/esp8266)\n• 3-tier fetch / live compile\n• esptool.py + SHA-256"]
         LINK["/dev/onstep\n(Published ONLY when verified)"]
         INDI["indiserver\nindi_lx200_OnStep @ 9600 baud\n(KStars / Ekos / SkySafari)"]
         UI["Astroberry Web UI Overlay\nhttp://astroberry.local + /onstep/"]
@@ -43,7 +43,7 @@ flowchart LR
 ```mermaid
 sequenceDiagram
     autonumber
-    participant USB as Any NodeMCU (ESP8266 or ESP32)
+    participant USB as ESP32-WROOM or NodeMCU ESP8266
     participant UDEV as udev
     participant SVC as onstep_provision.py
     participant NET as GitHub (0denko/AstroDrive & OnStepX)
@@ -54,12 +54,12 @@ sequenceDiagram
     SVC->>SVC: flock + check /proc/*/fd (abort if INDI holds port)
     SVC->>USB: Wait 2.5s, open (DTR=0, RTS=0), send :GVP# @ 9600
     alt Replies "On-Step#" (and AUTO_UPGRADE=false)
-        USB-->>SVC: On-Step# / 10.28a#
-    else Blank / Random NodeMCU (AUTO_FLASH=true)
-        SVC->>USB: esptool --chip auto chip_id (detect esp8266 vs esp32)
+        USB-->>SVC: On-Step# / 10.29f#
+    else Blank / Random Board (AUTO_FLASH=true)
+        SVC->>USB: esptool --chip auto chip_id (detect esp32 vs esp8266)
         SVC->>NET: Tier 1: Fetch latest verified profile .bin from GitHub Releases
         Note over SVC,NET: Tier 2: Use local verified cache if offline<br/>Tier 3: Pull latest hjd1964/OnStepX & live-compile via arduino-cli
-        SVC->>USB: esptool write_flash (0x00000 ESP8266 / 0x0 merged ESP32)
+        SVC->>USB: esptool write_flash (0x0 merged ESP32 / 0x00000 ESP8266)
         SVC->>USB: Hard reset + wait 3.0s + re-verify :GVP#
         USB-->>SVC: On-Step#
     end
@@ -69,22 +69,31 @@ sequenceDiagram
 
 ---
 
-## Hardware & Wiring Summary
+## Hardware & Wiring Diagrams
+
+### ESP32-WROOM + 2× TMC2208 (Recommended Primary)
+
+![ESP32-WROOM + 2x TMC2208 Wiring Diagram](docs/wiring-esp32-tmc2208.svg)
+
+### NodeMCU ESP8266 + 2× TMC2208 (Drop-In Backup)
+
+![NodeMCU ESP8266 + 2x TMC2208 Wiring Diagram](docs/wiring-nodemcu-esp8266-tmc2208.svg)
 
 All pin assignments in both firmware profiles match [`HARDWARE.md`](HARDWARE.md) directly:
 
-| Signal | NodeMCU ESP8266 | ESP32-WROOM | TMC2209 Pin | Notes |
+| Signal | ESP32-WROOM (Primary) | NodeMCU ESP8266 (Backup) | TMC2208 Pin | Notes |
 | :--- | :---: | :---: | :---: | :--- |
-| **RA STEP** | `D1` (`GPIO5`) | `GPIO25` | RA `STEP` | Boot-safe |
-| **RA DIR** | `D2` (`GPIO4`) | `GPIO26` | RA `DIR` | Boot-safe |
-| **RA ENABLE** | `D0` (`GPIO16`) | `GPIO27` | RA `EN` | Active LOW — fit **10 kΩ pull-up to `VIO`** (essential on NodeMCU `D0`!) |
-| **DEC STEP** | `D5` (`GPIO14`) | `GPIO14` | DEC `STEP` | Boot-safe |
-| **DEC DIR** | `D6` (`GPIO12`) | `GPIO12` | DEC `DIR` | On ESP32, `GPIO12` is a strapping pin (no external pull-up) |
-| **DEC ENABLE** | `D7` (`GPIO13`) | `GPIO13` | DEC `EN` | Active LOW |
-| **Logic VCC / GND** | `3V3` / `GND` | `3V3` / `GND` | `VIO` / logic `GND` | **Never feed 5 V into ESP8266/ESP32 pins** |
+| **RA STEP** | `GPIO25` | `D1` (`GPIO5`) | RA `STEP` | Boot-safe |
+| **RA DIR** | `GPIO26` | `D2` (`GPIO4`) | RA `DIR` | Boot-safe |
+| **RA ENABLE** | `GPIO27` | `D0` (`GPIO16`) | RA `EN` | Active LOW — fit **10 kΩ pull-up to `VIO`** (mandatory on NodeMCU `D0`!) |
+| **DEC STEP** | `GPIO14` | `D5` (`GPIO14`) | DEC `STEP` | Boot-safe |
+| **DEC DIR** | `GPIO12` | `D6` (`GPIO12`) | DEC `DIR` | On ESP32, `GPIO12` is a strapping pin (**no external pull-up!**) |
+| **DEC ENABLE** | `GPIO13` | `D7` (`GPIO13`) | DEC `EN` | Active LOW — fit **10 kΩ pull-up to `VIO`** |
+| **Logic VCC / GND** | `3V3` / `GND` | `3V3` / `GND` | `VIO` / logic `GND` | **Never feed 5 V into ESP32/ESP8266 pins** |
+| **Driver Tie-Offs** | — | — | `MS1`, `MS2` → `VIO`; `PDN`, `CLK` → `GND` | Selects `1/16` StealthChop2 (256× interpolated) + internal clock + standstill power-down |
 
 - **Motors (`HARDWARE.md`):** `36H20HM-0504A` (`0.9°` = `400` steps/rev, `0.5 A`, `12 Ω`) on RA and `36H18HM` on DEC; at `1/16` microsteps (`MS1` + `MS2` → `VIO`) and `144:1` worm → **`2560.0` steps/degree**.
-- **TMC2209 `Vref`:** Start at **`~0.35 V`** (`~0.25 A RMS`, cool & plenty of torque at 144:1); never exceed **`0.71 V`** (`0.50 A` motor rating). Tune with motors disconnected and `100 µF` capacitors across `VM` and `GND`.
+- **TMC2208 `Vref`:** Start at **`~0.35 V`** (`~0.25 A RMS`, cool & plenty of torque at 144:1); never exceed **`0.71 V`** (`0.50 A` motor rating). Tune with motors disconnected and `100 µF` capacitors across `VM` and `GND`.
 
 ---
 
@@ -93,6 +102,9 @@ All pin assignments in both firmware profiles match [`HARDWARE.md`](HARDWARE.md)
 ```text
 AstroDrive/
 ├── HARDWARE.md                            # Complete motor, power, Vref, and wire-by-wire guide
+├── docs/
+│   ├── wiring-esp32-tmc2208.svg           # Full schematic: ESP32-WROOM + 2× TMC2208
+│   └── wiring-nodemcu-esp8266-tmc2208.svg # Full schematic: NodeMCU ESP8266 + 2× TMC2208
 ├── .github/workflows/
 │   ├── build-firmware.yml                 # Weekly/on-demand OnStepX overlay compiler -> Releases
 │   └── build-pi-image.yml                 # Upstream Astroberry / RPi OS + overlay -> .img.xz
@@ -120,14 +132,14 @@ AstroDrive/
 │   ├── setup_hotspot.sh                   # NetworkManager Home Wi-Fi + Dark-Sky Hotspot fallback
 │   └── configure_nginx_overlay.sh         # Idempotent Nginx overlay attach + APT upgrade hook
 └── firmware/
-    ├── README.md                          # TMC2209S jumper microstepping & Vref guide
+    ├── README.md                          # TMC2208S jumper microstepping & Vref guide
     ├── build.sh                           # Multi-profile arduino-cli builder (--profile / --all)
     ├── platformio.ini                     # Optional PlatformIO config (nodemcuv2)
-    ├── Config.h -> profiles/nodemcu-esp8266-tmc2209s/Config.h
-    ├── Extended.config.h -> profiles/nodemcu-esp8266-tmc2209s/Extended.config.h
+    ├── Config.h -> profiles/nodemcu-esp32-tmc2208s/Config.h
+    ├── Extended.config.h -> profiles/nodemcu-esp32-tmc2208s/Extended.config.h
     └── profiles/
-        ├── nodemcu-esp8266-tmc2209s/      # NodeMCU ESP8266 + 2× TMC2209S (pins 5/4/16, 14/12/13)
-        └── nodemcu-esp32-tmc2209s/        # ESP32-WROOM + 2× TMC2209S (pins 25/26/27, 14/12/13)
+        ├── nodemcu-esp32-tmc2208s/        # ESP32-WROOM + 2× TMC2208S (pins 25/26/27, 14/12/13)
+        └── nodemcu-esp8266-tmc2208s/      # NodeMCU ESP8266 + 2× TMC2208S (pins 5/4/16, 14/12/13)
 ```
 
 ---

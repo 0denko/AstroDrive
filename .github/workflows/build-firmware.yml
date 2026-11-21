@@ -83,9 +83,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           DATE_TAG="firmware-$(date -u +%Y.%m.%d-%H%M)"
-          ESP8266_VER="$(python3 -c 'import json; print(json.load(open("release-assets/manifest-nodemcu-esp8266-tmc2209s.json"))["firmware_version"])')"
-          ESP8266_SHA="$(python3 -c 'import json; print(json.load(open("release-assets/manifest-nodemcu-esp8266-tmc2209s.json"))["onstepx_commit"])')"
+          ESP32_VER="$(python3 -c 'import json; print(json.load(open("release-assets/manifest-nodemcu-esp32-tmc2208s.json"))["firmware_version"])')"
+          ESP32_SHA="$(python3 -c 'import json; print(json.load(open("release-assets/manifest-nodemcu-esp32-tmc2208s.json"))["onstepx_commit"])')"
           gh release create "${DATE_TAG}" release-assets/* \
-            --title "OnStepX v${ESP8266_VER} (${ESP8266_SHA}) — NodeMCU Overlay" \
-            --notes "Automated overlay build against upstream \`hjd1964/OnStepX\` commit \`${ESP8266_SHA}\`.\n\nIncluded profiles:\n- \`nodemcu-esp8266-tmc2209s\` (NodeMCU ESP8266 + 2× TMC2209S)\n- \`nodemcu-esp32-tmc2209s\` (NodeMCU-32S ESP32 + 2× TMC2209S)" \
+            --title "OnStepX v${ESP32_VER} (${ESP32_SHA}) — ESP32 & ESP8266 TMC2208S Overlay" \
+            --notes "Automated overlay build against upstream \`hjd1964/OnStepX\` commit \`${ESP32_SHA}\`.\n\nIncluded profiles:\n- \`nodemcu-esp32-tmc2208s\` (ESP32-WROOM / NodeMCU-32S + 2× TMC2208S)\n- \`nodemcu-esp8266-tmc2208s\` (NodeMCU ESP8266 + 2× TMC2208S)" \
             --latest

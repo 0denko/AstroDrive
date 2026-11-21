@@ -1,24 +1,24 @@
 # Hardware
 
 The parts on hand and how they wire into the mount. Pin numbers here match the OnStepX firmware
-profiles in [firmware/profiles/nodemcu-esp8266-tmc2209s/Config.h](firmware/profiles/nodemcu-esp8266-tmc2209s/Config.h)
-and [firmware/profiles/nodemcu-esp32-tmc2209s/Config.h](firmware/profiles/nodemcu-esp32-tmc2209s/Config.h);
-change one and change the others. For a wire-by-wire checklist see [Connection list](#connection-list).
+profiles in [firmware/profiles/nodemcu-esp32-tmc2208s/Config.h](firmware/profiles/nodemcu-esp32-tmc2208s/Config.h)
+and [firmware/profiles/nodemcu-esp8266-tmc2208s/Config.h](firmware/profiles/nodemcu-esp8266-tmc2208s/Config.h);
+change one and change the others. For visual schematics see [Wiring diagrams](#wiring-diagrams) and for a wire-by-wire checklist see [Connection list](#connection-list).
 
 ## Inventory
 
 | Part | What it is | Role here |
 | --- | --- | --- |
-| Amica NodeMCU (ESP8266) | 3.3 V MCU board (CP2102) | Primary motion controller, OnStepX profile `nodemcu-esp8266-tmc2209s`. See [NodeMCU as the controller](#nodemcu-as-the-controller). |
-| ESP32-WROOM / NodeMCU-32S | 3.3 V MCU module | Drop-in upgrade controller, OnStepX profile `nodemcu-esp32-tmc2209s` (auto-detected by `esptool`). |
-| TMC2209 (or TMC2208) StepSticks | Ultra-silent stepper drivers, standalone Step/Dir (`TMC2209S`) | One per axis, RA and DEC (StealthChop2 + 256× MicroPlyer). |
+| ESP32-WROOM / NodeMCU-32S | 3.3 V MCU module | Primary motion controller, OnStepX profile `nodemcu-esp32-tmc2208s` (auto-detected by `esptool`). |
+| Amica NodeMCU (ESP8266) | 3.3 V MCU board (CP2102) | Drop-in backup controller, OnStepX profile `nodemcu-esp8266-tmc2208s`. See [NodeMCU as the controller](#nodemcu-as-the-controller). |
+| FYSETC TMC2208 V1.0 StepSticks | Ultra-silent stepper drivers, standalone Step/Dir (`TMC2208S`) | One per axis, RA and DEC (StealthChop2 + 256× MicroPlyer). |
 | 36H20HM stepper | 0.9°, 0.5 A/phase, 12 Ω, 1100 g·cm | RA axis (`2560.0` steps/deg at 1/16 & 144:1 worm). |
 | 36H18HM stepper | 36 mm frame (NEMA 14) hybrid, 18 mm body | DEC axis. Specs still unconfirmed. |
 | KP35FM2 stepper | 1.8°, 0.6 A/phase, 37 Ω, 700 g·cm | Focuser only, see [Rail voltage](#rail-voltage). |
 | LM2596S modules | Adjustable buck converters, non-isolated | Derive 5 V logic from the 12 V motor rail. |
 | Relay modules | Opto-isolated relay boards | Switching dew heater, camera, or the motor rail. |
 
-Note the TMC2209/TMC2208 is a stepper driver, not a servo driver, despite how these modules are often
+Note the TMC2208 is a stepper driver, not a servo driver, despite how these modules are often
 listed. It has no position feedback; the mount is open loop.
 
 ### Motor specifications
@@ -92,11 +92,21 @@ need a rail of its own. Take driver `VIO` from the ESP32 `3V3` pin so the logic 
 same one driving `STEP`/`DIR`. Every ground in the system must be common: motor supply, buck
 outputs, ESP32, and Pi.
 
+## Wiring diagrams
+
+### ESP32-WROOM + 2× TMC2208 (Primary)
+
+![ESP32-WROOM + 2x TMC2208 Wiring Diagram](docs/wiring-esp32-tmc2208.svg)
+
+### Amica NodeMCU ESP8266 + 2× TMC2208 (Backup)
+
+![NodeMCU ESP8266 + 2x TMC2208 Wiring Diagram](docs/wiring-nodemcu-esp8266-tmc2208.svg)
+
 ## Signal wiring
 
 ```mermaid
 graph LR
-  PI["Raspberry Pi"] -->|"USB serial 115200"| ESP
+  PI["Raspberry Pi"] -->|"USB serial 9600 (OnStepX)"| ESP
   subgraph ESP["ESP32 dev board"]
     P25["GPIO25"]
     P26["GPIO26"]
@@ -288,12 +298,12 @@ pull-downs, so leaving them floating gives 1/8 instead: with `steps_per_revoluti
 1/16, every step is then worth twice the angle the software thinks, and moves land at double the
 commanded angle.
 
-| MS1 | MS2 | TMC2209 Microstep | TMC2208 Microstep |
+| MS1 | MS2 | TMC2208 Microstep | Internal Output (MicroPlyer) |
 | --- | --- | --- | --- |
-| GND | GND | 1/8 *(256× MicroPlyer)* | 1/8 |
-| GND | VIO | 1/64 *(256× MicroPlyer)* | 1/2 |
-| VIO | GND | 1/32 *(256× MicroPlyer)* | 1/4 |
-| VIO | VIO | **1/16** *(256× MicroPlyer)* | **1/16** |
+| GND | GND | 1/8 | 1/256 (StealthChop2) |
+| VIO | GND | 1/2 | 1/256 (StealthChop2) |
+| GND | VIO | 1/4 | 1/256 (StealthChop2) |
+| VIO | VIO | **1/16 (AstroDrive default)** | **1/256 (StealthChop2)** |
 
 The 36H motors are 0.9°, so 400 × 16 = **6400 steps per revolution**. At a 144:1 worm ratio (1:1 belt),
 that gives `6400 × 144 / 360 =` **`2560.0` steps per degree** (`AXIS1_STEPS_PER_DEGREE` and
