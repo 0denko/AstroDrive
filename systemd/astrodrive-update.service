@@ -1,0 +1,14 @@
+[Unit]
+Description=Check for and apply AstroDrive software updates when online and idle
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/onstep-autoprovision/config.env
+ExecStart=/opt/onstep-autoprovision/scripts/update_software.sh
+TimeoutStartSec=600
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=astrodrive-update
+PrivateTmp=yes

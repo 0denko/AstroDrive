@@ -46,26 +46,27 @@ No manual firmware compiling, no config file editing, and no memorizing Linux co
 curl -fsSL https://raw.githubusercontent.com/0denko/AstroDrive/main/setup.sh | sudo bash
 ```
 
-3. Wait 1–2 minutes until you see **`AstroDrive is installed and ready!`**.
-   - This automatically installs AstroDrive, downloads the latest ready-to-flash OnStepX firmware for both ESP32 and NodeMCU, pre-configures KStars/Ekos (`LX200 OnStep` on `/dev/onstep` at `9600` baud), and adds the guided **Setup Wizard** to Astroberry.
-   - You can close the Terminal now — you don't need it anymore!
+3. Wait **3–5 minutes** until you see **`AstroDrive is installed and ready!`** *(if the Pi has no internet yet, it will clearly warn that firmware wasn't downloaded and tell you how to retry)*.
+   - This installs AstroDrive, downloads the latest CI-built OnStepX firmware for both ESP32 and NodeMCU (SHA-256 checked against the release manifest), pre-configures KStars/Ekos (`LX200 OnStep` on `/dev/onstep` at `9600` baud), enables safe daily background updates (opt-out), and prints your personal **Setup Wizard link** (which includes your Setup PIN).
+   - You can close the Terminal after copying or clicking the link!
 
 ---
 
 ### Step 4 — Click Through the Setup Wizard in Your Browser
 
-1. Reload **`http://astroberry.local`** and click the **`AstroDrive Setup`** button in the bottom-right corner *(or go directly to `http://astroberry.local/onstep/`)*.
+1. Open the **Setup Wizard link** printed at the end of Step 3 (`http://astroberry.local/onstep/?token=...`, or the direct fallback `http://astroberry.local:8090/?token=...`).
+   - *(If you open `http://astroberry.local` later without the link, click **`AstroDrive Setup`** in the bottom-right corner and paste the Setup PIN from `/etc/onstep-autoprovision/webui.token` once.)*
 2. Click **Next →** through the 5 guided screens:
 
 | Screen | What You Do |
 | :--- | :--- |
-| **1. System Check** | Confirm the green checkmarks (Pi power, cached firmware, KStars/Ekos defaults). Click **Next**. |
-| **2. Wi-Fi & Field Hotspot** *(optional)* | Enter a hotspot name & password so your phone can connect out under dark skies, click **Save**, then **Next** (or skip). |
-| **3. Flash Board** | Plug your **bare** ESP32 or NodeMCU into any Pi USB port (no 12 V or motors yet). Wait ~30–60 seconds for the green **Controller Ready!** message, then click **Next**. |
+| **1. System Check** | Confirm the green checkmarks (Pi power, downloaded firmware, Astroberry overlay, KStars/Ekos defaults, AstroDrive version). Fix any yellow/red item with one click, then click **Next**. |
+| **2. Wi-Fi & Field Hotspot** *(optional)* | Choose a hotspot name & password (8+ characters) if you want the Pi to create its own Wi-Fi out under dark skies, click **Save**, then **Next** (or skip). |
+| **3. Flash Board** | Plug your **bare** ESP32 or NodeMCU into any Pi USB port (no 12 V or motors yet). Click **⚡ Flash OnStepX to This Board** — wait ~30–60 seconds for the green **Controller Ready!** message, then click **Next**. *(Unrelated USB accessories are never overwritten automatically.)* |
 | **4. Wiring & Safety** | Unplug USB, pick your board to view the wiring picture right on screen, tick off the 6 safety checks (including setting `Vref ≈ 0.35 V` with motors unplugged), and turn on **12 V power before plugging USB back in**. Click **Next**. |
 | **5. Connect & Finish** | Open **KStars → Ekos**, pick **Mount: `LX200 OnStep`**, click **Start** → **Connect**, and test moving the motors on your desk before mounting them on the telescope! |
 
-> **Tip for dark-sky trips (no internet):** When you're away from home Wi-Fi, join the Pi's hotspot (`AstroPi-OnStep`), open `http://10.42.0.1/onstep/`, and tap **Sync Pi Clock from This Phone/Laptop** so your mount has the exact time.
+> **Tip for dark-sky trips (no internet):** If you configured a field hotspot in Wizard Screen 2, join that hotspot on your phone when away from home Wi-Fi, open `http://10.42.0.1/onstep/` (or `http://10.42.0.1:8090/`), and tap **Sync Pi Clock from This Phone/Laptop** so your mount has the exact time.
 
 ---
 

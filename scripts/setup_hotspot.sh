@@ -20,7 +20,7 @@ fi
 IFACE="${IFACE:-wlan0}"
 AP_CON_NAME="${AP_CON_NAME:-astropi-hotspot}"
 AP_SSID="${AP_SSID:-AstroPi-OnStep}"
-AP_PASS="${AP_PASS:-astropi1234}"
+AP_PASS="${AP_PASS:-}"
 AP_IP="${AP_IP:-10.42.0.1/24}"
 HOME_SSID=""
 HOME_PASS=""

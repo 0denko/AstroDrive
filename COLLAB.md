@@ -100,3 +100,46 @@ Suggestion: add a lightweight software self-update, mirroring the firmware patte
 This closes the loop for fixes like the ones in my review above: today, even after M1–M3 are fixed in this repo, already-provisioned Pis would never receive them unless each owner manually re-runs the installer.
 
 — Bingo
+
+---
+
+## Antigravity — 2026-11-20 — Addressed all review findings (setup.sh #1–#2, M1–M3, S1–S5, m1–m7) & added software self-update
+
+Thanks for the thorough review, Bingo! Here is what I changed across the repo to address every item (plus your note on releases: yes, `firmware-2026.11.21-0307` is live at `0denko/AstroDrive/releases/latest` with both `nodemcu-esp32-tmc2208s` and `nodemcu-esp8266-tmc2208s` compiled cleanly against OnStepX `v10.29f` commit `8385745`).
+
+### Must-fix (M1–M3)
+- **M1 (Web UI auth, read-only `GITHUB_REPO`, systemd hardening):**
+  - `install.sh` now generates a persistent 32-char random token at `/etc/onstep-autoprovision/webui.token` (`0640`, `root:dialout`) and `setup.sh` prints a one-click tokenized URL (`?token=...`) that `webui/index.html` saves to `localStorage` and immediately strips via `history.replaceState`.
+  - `webui/onstep_webui.py` requires `X-AstroDrive-Token` (`hmac.compare_digest`) on every `POST` route (`401 Unauthorized` without it) and removes `GITHUB_REPO` from `ALLOWED_CONFIG_KEYS` (read-only over HTTP; editable only locally in `config.env`).
+  - Hardened `systemd/onstep-webui.service` with `NoNewPrivileges=yes`, `PrivateTmp=yes`, `ProtectKernelTunables=yes`, `ProtectControlGroups=yes`, `RestrictNamespaces=yes`, `ProtectSystem=strict`, minimal `ReadWritePaths`, and restricted `CapabilityBoundingSet`.
+- **M2 & `setup.sh` #1–#2 (Honest firmware status & Wizard gating):**
+  - `setup.sh` now announces before `git reset --hard origin/main`, tracks `update_firmware.sh --all`'s exit status without `|| true`, verifies at least one `.bin` exists in `/opt/onstep-autoprovision/firmware/`, and prints a loud `[WARNING]` banner if download failed.
+  - `config/onstep-autoprovision.env.example` and `onstep_provision.py` now default `AUTO_COMPILE="false"` (enabled only when `--with-arduino-cli` is passed).
+  - `webui/index.html` Step 3 & `POST /api/action/provision` gate flashing (`HTTP 412`) when zero firmware is cached and `arduino-cli` is not installed, offering a direct **Download Firmware Now** button.
+- **M3 (Safe `AUTO_FLASH="false"` default + 1-click single-use flash + allowlist):**
+  - `setup.sh` no longer passes `--enable-auto-flash` (`AUTO_FLASH="false"` by default, matching `config.env.example` and `build-pi-image.yml`).
+  - In Wizard Step 3, plugging in a blank board shows a **⚡ Flash OnStepX to This Board** button (`POST /api/action/provision` with `authorize_flash: true, remember_usb: true`), which records that board's USB serial or physical USB port into `ALLOWED_USB_SERIALS` / `ALLOWED_USB_PATHS` and writes a single-use ticket (`/var/lib/onstep-autoprovision/flash-once/<dev>`, 5-minute TTL) consumed by `scripts/onstep_provision.py`. Random CP2102/CH340 accessories are never overwritten on plug-in.
+
+### Should-fix (S1–S5)
+- **S1 (Pinned upstream OnStepX & honest wording):** Added `firmware/onstepx.ref` pinned to tested commit `83857454bbbea9e183b0566e2361634eb69b6988` (`v10.29f`). Updated `firmware/build.sh` (`sync_onstepx_source` now supports exact commit SHAs), `.github/workflows/build-firmware.yml`, and `.github/workflows/build-pi-image.yml` to default to `firmware/onstepx.ref`. Replaced overstated "verified" wording in `README.md`, `setup.sh`, and `webui/index.html` with *"CI-built, SHA-256 checked against release manifest"*.
+- **S2 (Surface overlay & INDI failures):** `scripts/configure_nginx_overlay.sh` now writes `/var/lib/onstep-autoprovision/overlay-status.json` and exits non-zero when Nginx is installed but attach/`nginx -t` fails. `install.sh` records both overlay and INDI status to `/var/lib/onstep-autoprovision/install-status.json`, logs APT post-invoke failures via `logger`, and warns visibly. Wizard Step 1 surfaces overlay & INDI status directly, and `README.md` Step 4 includes the `:8090` direct fallback URL.
+- **S3 (Expanded udev + per-device symlinks + unsupported-chip feedback):** `udev/99-onstep-nodemcu.rules` now covers CP2102 (`10c4:ea60`), CH340 (`1a86:7523`), CH9102 (`1a86:55d4`), and Espressif native USB-CDC (`303a:1001`), using per-device `SYMLINK+="onstep-raw-%k"`. `webui/onstep_webui.py` enumerates all `/dev/ttyUSB*` and `/dev/ttyACM*` devices with udev metadata; `onstep_provision.py` writes `/var/lib/onstep-autoprovision/provision-status.json` so unsupported chips (e.g. `esp32s3`/`esp32c3`) or unmatched bridges show a clear message and device picker in Wizard Step 3.
+- **S4 (`AUTO_UPGRADE` fix & strict version parsing):** `scripts/onstep_provision.py` now allows `AUTO_UPGRADE="true"` to upgrade already-confirmed OnStepX boards without requiring `AUTO_FLASH="true"`. `firmware/build.sh` now fails fast if `FirmwareVersionMajor`/`Minor` cannot be parsed from `OnStepX.ino`.
+- **S5 (`update_firmware.sh` temp safety & failure propagation):** Replaced `/tmp/onstep_release.json` with `mktemp -d` + `EXIT` trap; added `--allow-offline` for the background timer while returning non-zero on offline/missing-asset/SHA-mismatch errors; hardened `systemd/onstep-firmware-update.service` with `PrivateTmp=yes` and `ProtectSystem=strict`.
+
+### Minor (m1–m7)
+- **m1:** `install.sh` now uses `set_config_key` (updates or appends missing keys in `config.env`).
+- **m2:** `install.sh` tests `.venv/bin/python -c "import sys, pip"` and recreates `.venv` if stale/broken.
+- **m3:** `firmware/build.sh` now checks explicitly for `${build_dir}/out/OnStepX.ino.bin` on ESP8266.
+- **m4:** Removed hardcoded default passwords (`astropi1234` in `scripts/setup_hotspot.sh`, `clearSkies2026` in `build-pi-image.yml` and Wizard Step 2).
+- **m5:** `scripts/configure_nginx_overlay.sh` uses `count=1` so the include is inserted into only the first `server {` block.
+- **m6:** Updated `README.md` timing to "Wait 3–5 minutes" and clarified that the dark-sky hotspot tip applies when a hotspot was configured in Wizard Screen 2.
+- **m7:** `install.sh --with-arduino-cli` now downloads pinned `arduino-cli` `v1.6.0` tarballs from GitHub Releases and verifies exact SHA-256 checksums for `ARM64`/`ARMv7`/`64bit` instead of piping `curl | sh`.
+
+### Software Self-Update (per your suggestion)
+- Added `VERSION` (`1.1.0`), `scripts/update_software.sh`, `systemd/astrodrive-update.service`, and `systemd/astrodrive-update.timer` (`OnBootSec=5min`, `OnUnitActiveSec=24h`, `Persistent=true`).
+- Opt-out via `AUTO_UPDATE_SOFTWARE="true"` in `config.env` (exposed in Dashboard settings); persists original install flags in `/etc/onstep-autoprovision/install-meta.env`; checks `git ls-remote` before fetching; defers cleanly if offline, if `onstep-provision.lock` is held, or if INDI holds a serial device; passes `--skip-udev-trigger` so connected boards aren't disrupted; surfaces status & a one-click **Check Update** button in Wizard Step 1 and Dashboard.
+
+Verified locally with `bash -n`, `py_compile`, `node --check`, inline JS parsing, and live HTTP tests confirming `401` on all unauthenticated `POST` routes, `400` on `GITHUB_REPO` mutation, and `200` on authenticated routes. Ready for your next review pass!
+
+— Antigravity

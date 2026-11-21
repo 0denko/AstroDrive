@@ -1,36 +1,49 @@
 # /etc/udev/rules.d/99-onstep-nodemcu.rules
 #
-# Automated detection & readiness gating for NodeMCU ESP8266 OnStepX controllers.
+# Automated detection & readiness gating for ESP32 / NodeMCU OnStepX controllers.
 #
 # Architecture note:
-#   - Creates /dev/onstep-raw immediately, NEVER /dev/onstep directly.
+#   - Creates per-device /dev/onstep-raw-%k immediately, NEVER /dev/onstep directly
+#     (avoids symlink collisions when multiple USB-serial devices are attached).
 #   - Blocks ModemManager from probing the port with AT commands (ID_MM_DEVICE_IGNORE=1).
 #   - Triggers `onstep-autoprovision@%k.service` asynchronously via systemd (never runs
-#     esptool.py inside udev RUN+=, avoiding udev's ~30-60s timeout).
-#   - The systemd service verifies LX200 `:GVP# -> On-Step#` (flashing if needed) and
-#     atomically publishes /dev/onstep ONLY when the controller is ready for INDI.
-#
-# IMPORTANT SAFETY TIP:
-#   If you have other CP2102 or CH340 devices on the Pi (focusers, dew heaters, GPS),
-#   uncomment and set ATTRS{serial}=="..." (CP2102) or KERNELS=="1-1.2" (CH340 port)
-#   below, AND/OR populate ALLOWED_USB_SERIALS / ALLOWED_USB_PATHS in
-#   /etc/onstep-autoprovision/config.env.
+#     esptool inside udev RUN+=, avoiding udev's ~30-60s timeout).
+#   - The systemd service verifies LX200 `:GVP# -> On-Step#` (and only flashes if explicitly
+#     authorized via the Setup Wizard or AUTO_FLASH=true), then atomically publishes /dev/onstep.
 
-# NodeMCU v2 (Amica) - Silicon Labs CP2102 USB-to-UART Bridge
+# Silicon Labs CP2102 / CP2104 (ESP32-WROOM DevKit, Amica NodeMCU v2)
 ACTION=="add", SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", \
   MODE="0660", GROUP="dialout", \
   ENV{ID_MM_DEVICE_IGNORE}="1", \
   ENV{ONSTEP_RAW}="1", \
-  SYMLINK+="onstep-raw", \
+  SYMLINK+="onstep-raw-%k", \
   TAG+="systemd", \
   ENV{SYSTEMD_WANTS}="onstep-autoprovision@%k.service"
 
-# NodeMCU v3 (LoLin / CH340G clones) - QinHeng CH340 USB-to-UART Bridge
+# QinHeng CH340 / CH340G (NodeMCU v3 LoLin, ESP32 clones)
 ACTION=="add", SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", \
   MODE="0660", GROUP="dialout", \
   ENV{ID_MM_DEVICE_IGNORE}="1", \
   ENV{ONSTEP_RAW}="1", \
-  SYMLINK+="onstep-raw", \
+  SYMLINK+="onstep-raw-%k", \
+  TAG+="systemd", \
+  ENV{SYSTEMD_WANTS}="onstep-autoprovision@%k.service"
+
+# QinHeng CH9102 / CH9102F (modern ESP32-WROOM / ESP32-S2/S3 devkits)
+ACTION=="add", SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", \
+  MODE="0660", GROUP="dialout", \
+  ENV{ID_MM_DEVICE_IGNORE}="1", \
+  ENV{ONSTEP_RAW}="1", \
+  SYMLINK+="onstep-raw-%k", \
+  TAG+="systemd", \
+  ENV{SYSTEMD_WANTS}="onstep-autoprovision@%k.service"
+
+# Espressif Native USB-CDC / JTAG (ESP32-S2 / S3 / C3 devkits — detected & surfaced in UI)
+ACTION=="add", SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", \
+  MODE="0660", GROUP="dialout", \
+  ENV{ID_MM_DEVICE_IGNORE}="1", \
+  ENV{ONSTEP_RAW}="1", \
+  SYMLINK+="onstep-raw-%k", \
   TAG+="systemd", \
   ENV{SYSTEMD_WANTS}="onstep-autoprovision@%k.service"
 

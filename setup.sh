@@ -7,9 +7,10 @@
 # What this does automatically:
 #   1. Installs required packages (python3, venv, git, curl, udev).
 #   2. Downloads (or updates) AstroDrive into /opt/astrodrive-src.
-#   3. Installs the OnStepX auto-flasher, Web Setup Wizard, and Astroberry UI overlay.
-#   4. Pre-downloads the latest verified ESP32 & ESP8266 OnStepX firmware from GitHub Releases.
-#   5. Pre-configures KStars/Ekos INDI defaults (/dev/onstep @ 9600 baud).
+#   3. Installs the OnStepX provisioner (safe AUTO_FLASH=false by default),
+#      authenticated Web Setup Wizard, daily self-updater, and Astroberry UI overlay.
+#   4. Downloads the latest CI-built ESP32 & ESP8266 OnStepX firmware (SHA-256 checked
+#      against the release manifest) and warns clearly if offline or download fails.
 set -euo pipefail
 
 REPO_URL="${ASTRODRIVE_REPO_URL:-https://github.com/0denko/AstroDrive.git}"
@@ -36,6 +37,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python3-venv pytho
 
 echo "==> [2/4] Downloading AstroDrive..."
 if [ -d "${SRC_DIR}/.git" ]; then
+  echo "==> Updating existing ${SRC_DIR} to latest origin/main (any local edits in ${SRC_DIR} will be discarded)..."
   git -C "${SRC_DIR}" fetch --depth 1 origin main
   git -C "${SRC_DIR}" reset --hard origin/main
 else
@@ -45,20 +47,44 @@ fi
 
 echo "==> [3/4] Installing AstroDrive services & Web Setup Wizard..."
 chmod +x "${SRC_DIR}/install.sh"
-"${SRC_DIR}/install.sh" --enable-auto-flash --github-repo "${GITHUB_REPO}" "$@"
+"${SRC_DIR}/install.sh" --github-repo "${GITHUB_REPO}" "$@"
 
-echo "==> [4/4] Pre-downloading latest verified OnStepX firmware (ESP32 + ESP8266)..."
-/opt/onstep-autoprovision/scripts/update_firmware.sh --all || true
+echo "==> [4/4] Downloading latest CI-built OnStepX firmware (ESP32 + ESP8266)..."
+FW_OK="true"
+if ! /opt/onstep-autoprovision/scripts/update_firmware.sh --all; then
+  FW_OK="false"
+fi
+
+# Verify at least one .bin + manifest.json is actually cached on disk (M2)
+CACHED_BINS="$(find /opt/onstep-autoprovision/firmware -maxdepth 2 -name '*.bin' 2>/dev/null | wc -l | tr -d ' ')"
+if [ "${CACHED_BINS:-0}" -eq 0 ]; then
+  FW_OK="false"
+fi
 
 HOST_NAME="$(hostname 2>/dev/null || echo astroberry)"
+WEBUI_TOKEN="$(tr -d '[:space:]' < /etc/onstep-autoprovision/webui.token 2>/dev/null || echo "")"
+OVERLAY_ATTACHED="$(python3 -c 'import json; print(json.load(open("/var/lib/onstep-autoprovision/install-status.json")).get("nginx_overlay", ""))' 2>/dev/null || echo "")"
+
 echo ""
 echo "============================================================"
-echo "  AstroDrive is installed and ready!"
+if [ "${FW_OK}" = "true" ]; then
+  echo "  AstroDrive is installed and ready!"
+else
+  echo "  [WARNING] AstroDrive installed, BUT firmware download FAILED!"
+  echo "  No OnStepX firmware binaries are cached on this Pi yet."
+  echo "  -> Connect the Pi to the internet and re-run setup.sh, OR"
+  echo "     click 'Download Firmware' on Step 1 of the Setup Wizard."
+fi
 echo ""
-echo "  Next: Open your browser and go to:"
-echo "    -> http://astroberry.local/onstep/   (Astroberry OS)"
-echo "    -> http://${HOST_NAME}.local:8090/   (Standalone fallback)"
+echo "  Open the Setup Wizard in your browser (link includes your Setup PIN):"
+if [ "${OVERLAY_ATTACHED}" = "attached" ]; then
+  echo "    -> http://astroberry.local/onstep/?token=${WEBUI_TOKEN}"
+else
+  echo "    (Astroberry Nginx overlay was not attached — use the direct URL below)"
+fi
+echo "    -> http://${HOST_NAME}.local:8090/?token=${WEBUI_TOKEN}"
 echo ""
-echo "  Follow the on-screen Setup Wizard (Click Next -> Next -> Done)!"
+echo "  Your Setup PIN (if asked): ${WEBUI_TOKEN}"
+echo "  (Saved in /etc/onstep-autoprovision/webui.token)"
 echo "============================================================"
 echo ""

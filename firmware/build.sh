@@ -15,7 +15,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ONSTEPX_REPO="${ONSTEPX_REPO:-https://github.com/hjd1964/OnStepX.git}"
-ONSTEPX_REF="${ONSTEPX_REF:-main}"
+DEFAULT_REF="main"
+if [ -f "${SCRIPT_DIR}/onstepx.ref" ]; then
+  DEFAULT_REF="$(tr -d '[:space:]' < "${SCRIPT_DIR}/onstepx.ref")"
+fi
+ONSTEPX_REF="${ONSTEPX_REF:-${DEFAULT_REF}}"
 SRC_DIR="${SCRIPT_DIR}/src/OnStepX"
 BUILD_ROOT="${SCRIPT_DIR}/.build"
 OUT_ROOT="${SCRIPT_DIR}/prebuilt"
@@ -81,15 +85,17 @@ find_esptool_cmd() {
 
 sync_onstepx_source() {
   if [ ! -d "${SRC_DIR}/.git" ]; then
-    echo "==> Cloning upstream OnStepX (${ONSTEPX_REF})..."
-    mkdir -p "$(dirname "${SRC_DIR}")"
-    git clone --depth 1 --branch "${ONSTEPX_REF}" "${ONSTEPX_REPO}" "${SRC_DIR}"
+    echo "==> Fetching upstream OnStepX (${ONSTEPX_REF})..."
+    mkdir -p "${SRC_DIR}"
+    git -C "${SRC_DIR}" init -q
+    git -C "${SRC_DIR}" remote add origin "${ONSTEPX_REPO}"
   else
-    echo "==> Fetching latest upstream OnStepX (${ONSTEPX_REF})..."
-    git -C "${SRC_DIR}" fetch --depth 1 origin "${ONSTEPX_REF}"
-    git -C "${SRC_DIR}" checkout -f FETCH_HEAD
-    git -C "${SRC_DIR}" clean -fd
+    echo "==> Updating upstream OnStepX (${ONSTEPX_REF})..."
+    git -C "${SRC_DIR}" remote set-url origin "${ONSTEPX_REPO}"
   fi
+  git -C "${SRC_DIR}" fetch --depth 1 origin "${ONSTEPX_REF}"
+  git -C "${SRC_DIR}" checkout -f FETCH_HEAD
+  git -C "${SRC_DIR}" clean -fd
 }
 
 build_profile() {
@@ -164,10 +170,10 @@ build_profile() {
       exit 1
     fi
   else
-    local compiled_bin
-    compiled_bin="$(find "${build_dir}/out" -maxdepth 1 -name '*.bin' | head -n 1)"
-    if [ -z "${compiled_bin}" ] || [ ! -f "${compiled_bin}" ]; then
-      echo "[ERROR] Compiled .bin not found in ${build_dir}/out" >&2
+    local compiled_bin="${build_dir}/out/OnStepX.ino.bin"
+    if [ ! -f "${compiled_bin}" ]; then
+      echo "[ERROR] Expected ESP8266 output binary not found: ${compiled_bin}" >&2
+      ls -la "${build_dir}/out" >&2
       exit 1
     fi
     cp "${compiled_bin}" "${out_dir}/${OUT_BIN}"
@@ -175,10 +181,14 @@ build_profile() {
 
   local sha256 ver_major ver_minor ver_patch fw_version git_sha build_utc
   sha256="$(sha256sum "${out_dir}/${OUT_BIN}" | awk '{print $1}')"
-  ver_major="$(grep -E '#define FirmwareVersionMajor' "${SRC_DIR}/OnStepX.ino" | awk '{print $3}' | tr -d '\r' || true)"
-  ver_minor="$(grep -E '#define FirmwareVersionMinor' "${SRC_DIR}/OnStepX.ino" | awk '{print $3}' | tr -d '\r' || true)"
-  ver_patch="$(grep -E '#define FirmwareVersionPatch' "${SRC_DIR}/OnStepX.ino" | awk '{print $3}' | tr -d '\"' | tr -d '\r' || true)"
-  fw_version="${ver_major:-10}.${ver_minor:-25}${ver_patch:-a}"
+  ver_major="$(grep -E '#define[[:space:]]+FirmwareVersionMajor[[:space:]]+' "${SRC_DIR}/OnStepX.ino" | awk '{print $3}' | tr -d '\r' || true)"
+  ver_minor="$(grep -E '#define[[:space:]]+FirmwareVersionMinor[[:space:]]+' "${SRC_DIR}/OnStepX.ino" | awk '{print $3}' | tr -d '\r' || true)"
+  ver_patch="$(grep -E '#define[[:space:]]+FirmwareVersionPatch[[:space:]]+' "${SRC_DIR}/OnStepX.ino" | awk '{print $3}' | tr -d '\"' | tr -d '\r' || true)"
+  if [ -z "${ver_major}" ] || [ -z "${ver_minor}" ]; then
+    echo "[ERROR] Failed to parse FirmwareVersionMajor/Minor from ${SRC_DIR}/OnStepX.ino" >&2
+    exit 1
+  fi
+  fw_version="${ver_major}.${ver_minor}${ver_patch}"
   git_sha="$(git -C "${SRC_DIR}" rev-parse --short HEAD)"
   build_utc="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 

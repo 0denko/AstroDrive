@@ -76,19 +76,21 @@
       background: var(--card); border: 1px solid var(--border);
       border-radius: 12px; padding: 16px;
     }
-    .card h2 {
-      font-size: 15px; margin: 0 0 6px 0; color: var(--text);
-    }
+    .card h2 { font-size: 15px; margin: 0 0 6px 0; color: var(--text); }
     .card h3 {
       font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em;
       color: var(--muted); margin: 0 0 10px 0;
     }
     .muted { color: var(--muted); font-size: 13px; margin: 0 0 12px 0; }
 
-    /* Wizard stepper */
-    .stepper {
-      display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px;
+    .auth-bar {
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+      gap: 10px; padding: 12px 14px; border-radius: 10px;
+      border: 1px solid var(--warn); background: var(--warn-bg);
     }
+    .auth-bar input { max-width: 280px; }
+
+    .stepper { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
     .step-pill {
       display: flex; flex-direction: column; align-items: center; gap: 3px;
       padding: 8px 4px; border-radius: 10px; border: 1px solid var(--border);
@@ -146,9 +148,7 @@
       cursor: pointer; transition: background 0.15s, border-color 0.15s;
     }
     button:hover { background: var(--btn-hover); }
-    button.primary {
-      background: var(--accent); color: #071320; border-color: var(--accent);
-    }
+    button.primary { background: var(--accent); color: #071320; border-color: var(--accent); }
     button.primary:hover { filter: brightness(1.08); }
     button.outline { border-color: var(--accent); color: var(--accent); background: transparent; }
     button.sm { padding: 6px 10px; font-size: 12.5px; }
@@ -156,12 +156,13 @@
 
     .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
     .field { display: flex; flex-direction: column; gap: 4px; }
-    .field label-txt, .field span { font-size: 12px; color: var(--muted); font-weight: 600; }
+    .field span { font-size: 12px; color: var(--muted); font-weight: 600; }
     select, input[type="text"], input[type="password"] {
       background: var(--bg); color: var(--text);
       border: 1px solid var(--border); border-radius: 8px;
       padding: 8px 10px; font-size: 14px; width: 100%;
     }
+    input[readonly] { opacity: 0.7; cursor: not-allowed; }
     label.toggle {
       display: flex; align-items: center; justify-content: space-between; gap: 10px;
       padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
@@ -219,6 +220,19 @@
       </div>
     </header>
 
+    <!-- M1: Setup PIN Unlock Bar (auto-hidden when opened with ?token=... or already saved) -->
+    <div id="authBar" class="auth-bar hidden">
+      <div>
+        <div class="check-title">🔐 Enter your Setup PIN to enable flashing &amp; settings</div>
+        <div class="check-sub">Shown at the end of <code>setup.sh</code> (or run <code>cat /etc/onstep-autoprovision/webui.token</code> on the Pi).</div>
+      </div>
+      <div class="actions">
+        <input type="password" id="pinInput" placeholder="Paste Setup PIN" autocomplete="off" />
+        <button id="pinUnlockBtn" class="primary sm" type="button">Unlock</button>
+      </div>
+      <div class="msg" id="authMsg" style="width:100%; margin:0;"></div>
+    </div>
+
     <!-- ==================== GUIDED SETUP WIZARD ==================== -->
     <div id="wizardView">
       <div class="stepper" role="tablist">
@@ -231,8 +245,8 @@
 
       <!-- STEP 1: System Check -->
       <section class="card step-panel active" data-step="1" style="margin-top: 12px;">
-        <h2>Step 1 of 5 — Welcome &amp; Quick System Check</h2>
-        <p class="muted">AstroDrive automatically checked your Raspberry Pi. Everything green below is already done for you.</p>
+        <h2>Step 1 of 5 — Welcome &amp; System Health Check</h2>
+        <p class="muted">AstroDrive checked your Raspberry Pi. Confirm everything is green below before moving on.</p>
 
         <div class="check-list">
           <div class="check-row" id="chkPower">
@@ -250,12 +264,27 @@
             <button id="wizDownloadFwBtn" class="sm outline" type="button">☁️ Download Firmware</button>
           </div>
 
+          <div class="check-row" id="chkOverlay">
+            <div>
+              <div class="check-title" id="chkOverlayTitle">Checking Astroberry Web UI overlay…</div>
+              <div class="check-sub" id="chkOverlaySub">Status of http://astroberry.local/onstep/ integration</div>
+            </div>
+          </div>
+
           <div class="check-row" id="chkIndi">
             <div>
               <div class="check-title" id="chkIndiTitle">Checking KStars / Ekos (INDI) defaults…</div>
               <div class="check-sub" id="chkIndiSub">Sets LX200 OnStep to /dev/onstep @ 9600 baud</div>
             </div>
             <button id="wizApplyIndiBtn" class="sm outline" type="button">🔧 Apply Defaults</button>
+          </div>
+
+          <div class="check-row" id="chkSoftware">
+            <div>
+              <div class="check-title" id="chkSoftwareTitle">Checking AstroDrive software version…</div>
+              <div class="check-sub" id="chkSoftwareSub">Daily automatic updates keep scripts and UI current</div>
+            </div>
+            <button id="wizUpdateSwBtn" class="sm outline" type="button">↻ Check Update</button>
           </div>
         </div>
 
@@ -294,8 +323,8 @@
             <input type="text" id="wizApSsid" value="AstroPi-OnStep" autocomplete="off" />
           </div>
           <div class="field">
-            <span>Field Hotspot Password (8+ characters)</span>
-            <input type="text" id="wizApPass" value="clearSkies2026" autocomplete="off" />
+            <span>Field Hotspot Password (choose 8+ characters)</span>
+            <input type="password" id="wizApPass" placeholder="Choose an 8+ character password" autocomplete="off" />
           </div>
         </div>
 
@@ -310,26 +339,41 @@
         </div>
       </section>
 
-      <!-- STEP 3: Plug In & Auto-Flash -->
+      <!-- STEP 3: Plug In & Flash Board -->
       <section class="card step-panel" data-step="3" style="margin-top: 12px;">
-        <h2>Step 3 of 5 — Plug In Your ESP32 or NodeMCU</h2>
+        <h2>Step 3 of 5 — Plug In &amp; Flash Your ESP32 or NodeMCU</h2>
         <p class="muted">
           Do this <strong>on your desk first</strong> with just the bare microcontroller board (no 12 V power, drivers, or motors attached yet).
-          Plug it into any Raspberry Pi USB port using a short data-capable USB cable — AstroDrive detects the chip and installs OnStepX automatically.
+          For safety, AstroDrive will <strong>never</strong> overwrite random USB accessories automatically — plug your board in and click <strong>Flash OnStepX to This Board</strong> below.
         </p>
+
+        <!-- M2 gate when zero firmware is cached -->
+        <div class="banner err hidden" id="fwGateBanner">
+          <div class="banner-title">⚠️ No OnStepX firmware downloaded yet</div>
+          <div class="check-sub">Connect the Pi to the internet and download the ESP32/ESP8266 firmware before flashing.</div>
+          <div class="actions" style="margin-top: 8px;">
+            <button id="wizGateDownloadBtn" class="primary sm" type="button">☁️ Download Firmware Now</button>
+          </div>
+        </div>
 
         <div class="banner" id="flashBanner">
           <div class="banner-title" id="flashBannerTitle">Waiting for your ESP32 or NodeMCU…</div>
-          <div class="check-sub" id="flashBannerSub">Plug the board into a Raspberry Pi USB port now.</div>
+          <div class="check-sub" id="flashBannerSub">Plug the board into a Raspberry Pi USB port using a data USB cable.</div>
+        </div>
+
+        <!-- Multi-device selector (S3) -->
+        <div class="field hidden" id="usbSelectWrap" style="margin-bottom: 10px;">
+          <span>Detected USB Serial Device to Flash</span>
+          <select id="wizUsbSelect"></select>
         </div>
 
         <div class="actions">
-          <button class="primary" id="wizFlashNowBtn" type="button">⚡ Flash / Retry Now</button>
+          <button class="primary" id="wizFlashNowBtn" type="button">⚡ Flash OnStepX to This Board</button>
           <button id="wizTestBtn" type="button">🔍 Test Connection</button>
         </div>
 
         <p class="check-sub" style="margin-top: 10px;">
-          💡 <strong>ESP32 tip:</strong> Some ESP32 boards need you to hold the tiny <strong>BOOT</strong> button on the board for 2 seconds right after plugging it in.
+          💡 <strong>ESP32 tip:</strong> Some ESP32 boards need you to hold the tiny <strong>BOOT</strong> button on the board for 2 seconds right after clicking Flash.
         </p>
 
         <div class="msg" id="wizMsg3"></div>
@@ -423,8 +467,9 @@
         </div>
         <div class="actions" style="margin-top: 10px;">
           <button class="outline" id="probeBtn" type="button">🔍 Probe LX200 (:GVP#)</button>
-          <button id="updateBtn" type="button">☁️ Check Online Releases</button>
-          <button id="provisionBtn" type="button">⚡ Flash / Provision Now</button>
+          <button id="updateBtn" type="button">☁️ Check Firmware Releases</button>
+          <button id="updateSwBtn" type="button">↻ Update AstroDrive</button>
+          <button id="provisionBtn" type="button">⚡ Flash Selected Board</button>
           <button id="dashSyncTimeBtn" type="button">🕒 Sync Pi Clock</button>
           <button id="refreshBtn" type="button">↻ Refresh</button>
         </div>
@@ -440,23 +485,24 @@
       </section>
 
       <section class="card">
-        <h3>Advanced Provisioning Settings</h3>
+        <h3>Advanced Provisioning &amp; Update Settings</h3>
         <div class="form-grid">
-          <label class="toggle"><span>Auto-Flash Blank Boards</span><input type="checkbox" id="cfg_AUTO_FLASH" /></label>
-          <label class="toggle"><span>Auto-Upgrade Existing</span><input type="checkbox" id="cfg_AUTO_UPGRADE" /></label>
-          <label class="toggle"><span>Auto-Compile On-Pi (Online)</span><input type="checkbox" id="cfg_AUTO_COMPILE" /></label>
-          <label class="toggle"><span>Check GitHub Releases</span><input type="checkbox" id="cfg_ONLINE_CHECK_UPDATES" /></label>
+          <label class="toggle"><span>Auto-Flash Blank Boards (unattended)</span><input type="checkbox" id="cfg_AUTO_FLASH" /></label>
+          <label class="toggle"><span>Auto-Upgrade Confirmed OnStepX</span><input type="checkbox" id="cfg_AUTO_UPGRADE" /></label>
+          <label class="toggle"><span>Auto-Update AstroDrive Daily</span><input type="checkbox" id="cfg_AUTO_UPDATE_SOFTWARE" /></label>
+          <label class="toggle"><span>Check GitHub Firmware Releases</span><input type="checkbox" id="cfg_ONLINE_CHECK_UPDATES" /></label>
+          <label class="toggle"><span>Auto-Compile On-Pi (requires arduino-cli)</span><input type="checkbox" id="cfg_AUTO_COMPILE" /></label>
           <div class="field">
             <span>Target MCU Detection</span>
             <select id="cfg_TARGET_CHIP">
-              <option value="auto">auto (Any NodeMCU: ESP8266 / ESP32)</option>
+              <option value="auto">auto (ESP32 / ESP8266)</option>
               <option value="esp8266">esp8266 only</option>
               <option value="esp32">esp32 only</option>
             </select>
           </div>
           <div class="field">
-            <span>GitHub Repo (owner/repo)</span>
-            <input type="text" id="cfg_GITHUB_REPO" placeholder="0denko/AstroDrive" />
+            <span>Firmware Repository (read-only — edit config.env locally)</span>
+            <input type="text" id="cfg_GITHUB_REPO" readonly />
           </div>
         </div>
         <div class="actions" style="margin-top: 10px;">
@@ -465,7 +511,7 @@
       </section>
 
       <section class="card">
-        <h3>Live Provisioning &amp; Compile Logs</h3>
+        <h3>Live Provisioning &amp; Update Logs</h3>
         <pre id="logsPre">Loading logs…</pre>
       </section>
     </div>
@@ -475,6 +521,7 @@
     const API_BASE = window.location.pathname.startsWith('/onstep') ? '/onstep' : '';
     let cfgLoaded = false;
     let currentStep = 1;
+    let latestStatus = null;
 
     const $ = (id) => document.getElementById(id);
 
@@ -484,12 +531,39 @@
       }[c]));
     }
 
+    // M1: Capture ?token=... from setup.sh URL, persist in localStorage, and strip from URL bar
+    function initTokenFromUrl() {
+      const params = new URLSearchParams(window.location.search);
+      const urlTok = (params.get('token') || '').trim();
+      if (urlTok) {
+        localStorage.setItem('astrodrive_token', urlTok);
+        params.delete('token');
+        const cleanUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '') + window.location.hash;
+        window.history.replaceState({}, '', cleanUrl);
+      }
+      updateAuthBarVisibility();
+    }
+
+    function getToken() {
+      return (localStorage.getItem('astrodrive_token') || '').trim();
+    }
+
+    function updateAuthBarVisibility(forceShow = false) {
+      const hasTok = getToken().length > 0;
+      $('authBar').classList.toggle('hidden', hasTok && !forceShow);
+    }
+
     async function api(path, opts = {}) {
-      const res = await fetch(`${API_BASE}${path}`, {
-        headers: { 'Content-Type': 'application/json' },
-        ...opts,
-      });
-      return { ok: res.ok, status: res.status, data: await res.json() };
+      const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+      const tok = getToken();
+      if (tok) headers['X-AstroDrive-Token'] = tok;
+      const res = await fetch(`${API_BASE}${path}`, { ...opts, headers });
+      const data = await res.json();
+      if (res.status === 401 && data && data.auth_error) {
+        updateAuthBarVisibility(true);
+        setMsg('authMsg', data.error || 'Invalid Setup PIN. Please enter the PIN from setup.sh.', 'err');
+      }
+      return { ok: res.ok, status: res.status, data };
     }
 
     function setMsg(id, text, cls = '') {
@@ -532,6 +606,7 @@
     }
 
     function renderStatus(s) {
+      latestStatus = s;
       const dot = $('statusDot');
       dot.className = 'dot';
       if (s.provisioning_active) dot.classList.add('warn');
@@ -542,8 +617,14 @@
       const net = s.network || {};
       const profiles = s.cached_profiles || [];
       const readyProfiles = profiles.filter((p) => p.binary_present);
+      const hasFirmware = readyProfiles.length > 0;
+      const canCompile = Boolean(health.arduino_cli_installed);
+      const inst = s.install_status || {};
+      const sw = s.software_update || {};
+      const lastProv = s.last_provision || {};
+      const usbDevs = s.usb_devices || [];
 
-      // --- Wizard Step 1: System Checks ---
+      // --- Step 1: Power ---
       const chkPower = $('chkPower');
       if (health.undervoltage_now || health.undervoltage_past) {
         chkPower.className = 'check-row err';
@@ -555,18 +636,36 @@
         $('chkPowerSub').textContent = health.throttled_hex ? `Power status: ${health.throttled_hex} (no undervoltage)` : 'Ready';
       }
 
+      // --- Step 1: Firmware ---
       const chkFw = $('chkFirmware');
-      if (readyProfiles.length > 0) {
+      if (hasFirmware) {
         chkFw.className = 'check-row ok';
         const names = readyProfiles.map((p) => `${p.chip.toUpperCase()} v${p.firmware_version}`).join(' & ');
         $('chkFirmwareTitle').textContent = `✅ OnStepX firmware ready (${names})`;
-        $('chkFirmwareSub').textContent = 'Cached locally on the Pi — works even offline under dark skies.';
+        $('chkFirmwareSub').textContent = 'Cached locally on the Pi (SHA-256 checked against release manifest) — works offline too.';
       } else {
-        chkFw.className = 'check-row warn';
-        $('chkFirmwareTitle').textContent = '☁️ Firmware not cached yet';
-        $('chkFirmwareSub').textContent = 'Click "Download Firmware" while connected to the internet.';
+        chkFw.className = 'check-row err';
+        $('chkFirmwareTitle').textContent = '⚠️ OnStepX firmware not downloaded yet';
+        $('chkFirmwareSub').textContent = 'Connect the Pi to the internet and click "Download Firmware" before flashing a board.';
       }
 
+      // --- Step 1: Nginx Overlay (S2) ---
+      const chkOv = $('chkOverlay');
+      if (inst.nginx_overlay === 'attached') {
+        chkOv.className = 'check-row ok';
+        $('chkOverlayTitle').textContent = '✅ Astroberry Web UI overlay attached';
+        $('chkOverlaySub').textContent = inst.nginx_overlay_detail || 'Available inside http://astroberry.local/onstep/';
+      } else if (inst.nginx_overlay === 'failed' || inst.nginx_overlay === 'no_server_block') {
+        chkOv.className = 'check-row warn';
+        $('chkOverlayTitle').textContent = '⚠️ Astroberry overlay not attached (using port 8090)';
+        $('chkOverlaySub').textContent = inst.nginx_overlay_detail || `Open http://${health.hostname || 'astroberry'}.local:8090/ directly.`;
+      } else {
+        chkOv.className = 'check-row ok';
+        $('chkOverlayTitle').textContent = '✅ Direct Web UI active on port 8090';
+        $('chkOverlaySub').textContent = `Open http://${health.hostname || 'astroberry'}.local:8090/`;
+      }
+
+      // --- Step 1: INDI ---
       const chkIndi = $('chkIndi');
       if (health.indi_configured) {
         chkIndi.className = 'check-row ok';
@@ -578,7 +677,25 @@
         $('chkIndiSub').textContent = 'Click "Apply Defaults" so KStars/Ekos uses /dev/onstep automatically.';
       }
 
-      // --- Wizard Step 2: Wi-Fi & Hotspot ---
+      // --- Step 1: AstroDrive Software Self-Update ---
+      const chkSw = $('chkSoftware');
+      const verLbl = sw.installed_version ? `v${sw.installed_version}` : 'installed';
+      const commitLbl = sw.installed_commit ? ` (${sw.installed_commit.slice(0, 7)})` : '';
+      if (sw.status === 'error') {
+        chkSw.className = 'check-row err';
+        $('chkSoftwareTitle').textContent = `⚠️ AstroDrive ${verLbl}${commitLbl} — update failed`;
+        $('chkSoftwareSub').textContent = sw.message || 'Check logs for details.';
+      } else if (sw.status === 'update_available' || sw.status === 'deferred_busy') {
+        chkSw.className = 'check-row warn';
+        $('chkSoftwareTitle').textContent = `⬆️ AstroDrive ${verLbl}${commitLbl} — update available`;
+        $('chkSoftwareSub').textContent = sw.message || 'Click Check Update to apply when mount is idle.';
+      } else {
+        chkSw.className = 'check-row ok';
+        $('chkSoftwareTitle').textContent = `✅ AstroDrive ${verLbl}${commitLbl}`;
+        $('chkSoftwareSub').textContent = sw.message || 'Daily background update check enabled (opt-out in Dashboard).';
+      }
+
+      // --- Step 2: Wi-Fi & Hotspot ---
       const wb = $('wifiStatusBanner');
       if (net.hotspot_configured) {
         wb.className = 'banner ok';
@@ -592,7 +709,24 @@
         $('wifiStatusSub').textContent = 'Enter a hotspot name & password below and click Save (or click Next to skip).';
       }
 
-      // --- Wizard Step 3: Flash Board ---
+      // --- Step 3: Firmware Gate (M2) + Multi-device selector (S3) + Flash Status (M3) ---
+      $('fwGateBanner').classList.toggle('hidden', hasFirmware || canCompile);
+
+      const selWrap = $('usbSelectWrap');
+      const sel = $('wizUsbSelect');
+      if (usbDevs.length > 0) {
+        selWrap.classList.remove('hidden');
+        const prev = sel.value;
+        sel.innerHTML = usbDevs.map((d) => {
+          const info = [d.model, d.vid_pid, d.udev_matched === 'true' ? 'supported USB chip' : 'unrecognized USB chip'].filter(Boolean).join(' • ');
+          return `<option value="${esc(d.path)}">${esc(d.path)} (${esc(info)})</option>`;
+        }).join('');
+        if (prev && usbDevs.some((d) => d.path === prev)) sel.value = prev;
+      } else {
+        selWrap.classList.add('hidden');
+        sel.innerHTML = '';
+      }
+
       const fb = $('flashBanner');
       const p = s.probe || {};
       if (s.provisioning_active) {
@@ -607,19 +741,31 @@
         fb.className = 'banner ok';
         const ver = p.state === 'online' ? ` (${p.product} v${p.version} @ ${p.baud} baud)` : '';
         $('flashBannerTitle').textContent = `✅ Controller Ready on ${s.symlink_path}!${ver}`;
-        $('flashBannerSub').textContent = 'OnStepX is installed and verified. Click "Next: Wire Drivers & Motors" to continue!';
-      } else if (s.device) {
+        $('flashBannerSub').textContent = 'OnStepX is installed and responding. Click "Next: Wire Drivers & Motors" to continue!';
+      } else if (lastProv.state && ['unsupported_chip', 'missing_firmware', 'detect_failed', 'flash_failed', 'verify_failed', 'error'].includes(lastProv.state) && s.device) {
+        fb.className = 'banner err';
+        $('flashBannerTitle').textContent = '⚠️ Action needed on detected USB board';
+        $('flashBannerSub').textContent = lastProv.message || 'Check the technical log below.';
+      } else if (usbDevs.length > 0) {
         fb.className = 'banner warn';
-        $('flashBannerTitle').textContent = `🔌 Board plugged in (${s.device}), waiting to flash`;
-        $('flashBannerSub').textContent = 'Click "Flash / Retry Now" below to install OnStepX onto this board.';
+        const matched = usbDevs.some((d) => d.udev_matched === 'true');
+        $('flashBannerTitle').textContent = matched
+          ? `🔌 Board detected (${sel.value || s.device}) — ready to flash`
+          : `🔌 USB serial device detected (${sel.value || s.device}), unrecognized chip`;
+        $('flashBannerSub').textContent = matched
+          ? 'Click "Flash OnStepX to This Board" below to install OnStepX and remember this board safely.'
+          : 'This USB bridge is not CP2102/CH340/CH9102/ESP32-CDC. You can still select it and try flashing, or check your cable/board.';
       } else {
         fb.className = 'banner';
         $('flashBannerTitle').textContent = '🔌 Waiting for your ESP32 or NodeMCU…';
         $('flashBannerSub').textContent = 'Plug the bare board into a Raspberry Pi USB port using a data USB cable.';
       }
-      $('wizFlashNowBtn').disabled = s.indi_active || s.provisioning_active || !s.device;
 
-      // --- Wizard Step 5: Clock ---
+      const canFlashNow = !s.indi_active && !s.provisioning_active && usbDevs.length > 0 && (hasFirmware || canCompile);
+      $('wizFlashNowBtn').disabled = !canFlashNow;
+      $('provisionBtn').disabled = !canFlashNow;
+
+      // --- Step 5: Clock ---
       $('piClockVal').textContent = health.system_time_utc || '—';
 
       // --- Dashboard View ---
@@ -639,11 +785,10 @@
         ? `⚠️ Low voltage (${health.throttled_hex})`
         : (health.throttled_hex ? `OK (${health.throttled_hex})` : 'OK');
       $('clockVal').textContent = health.system_time_utc || '—';
-      $('provisionBtn').disabled = s.indi_active || s.provisioning_active || !s.device;
 
       const tbody = $('profilesBody');
       if (profiles.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" style="color:var(--muted)">No cached binaries yet — click "Check Online Releases"</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="4" style="color:var(--muted)">No cached binaries yet — click "Check Firmware Releases"</td></tr>';
       } else {
         tbody.innerHTML = profiles.map((pf) => `
           <tr>
@@ -658,6 +803,7 @@
       if (!cfgLoaded && s.config) {
         $('cfg_AUTO_FLASH').checked = s.config.AUTO_FLASH === 'true';
         $('cfg_AUTO_UPGRADE').checked = s.config.AUTO_UPGRADE === 'true';
+        $('cfg_AUTO_UPDATE_SOFTWARE').checked = s.config.AUTO_UPDATE_SOFTWARE !== 'false';
         $('cfg_AUTO_COMPILE').checked = s.config.AUTO_COMPILE === 'true';
         $('cfg_ONLINE_CHECK_UPDATES').checked = s.config.ONLINE_CHECK_UPDATES === 'true';
         $('cfg_TARGET_CHIP').value = s.config.TARGET_CHIP || 'auto';
@@ -687,6 +833,23 @@
       }
     }
 
+    // PIN Unlock
+    $('pinUnlockBtn').addEventListener('click', async () => {
+      const pin = $('pinInput').value.trim();
+      if (!pin) return;
+      localStorage.setItem('astrodrive_token', pin);
+      setMsg('authMsg', 'Verifying Setup PIN…');
+      const res = await api('/api/auth/verify', { method: 'POST', body: '{}' });
+      if (res.ok) {
+        $('pinInput').value = '';
+        setMsg('authMsg', '');
+        updateAuthBarVisibility(false);
+      } else {
+        localStorage.removeItem('astrodrive_token');
+        setMsg('authMsg', res.data.error || 'Incorrect Setup PIN.', 'err');
+      }
+    });
+
     // Tabs & Stepper
     $('tabWizard').addEventListener('click', () => switchTab('wizard'));
     $('tabDash').addEventListener('click', () => switchTab('dash'));
@@ -712,13 +875,24 @@
       cb.addEventListener('change', () => localStorage.setItem(key, cb.checked ? '1' : '0'));
     });
 
-    // Wizard actions
-    $('wizDownloadFwBtn').addEventListener('click', async () => {
-      setMsg('wizMsg1', 'Downloading latest verified ESP32 & ESP8266 firmware…');
+    async function triggerFwDownload(msgId) {
+      setMsg(msgId, 'Downloading latest CI-built ESP32 & ESP8266 firmware…');
       const res = await api('/api/action/update-cache', { method: 'POST', body: '{}' });
-      setMsg('wizMsg1', res.ok ? res.data.message : (res.data.error || 'Download failed'), res.ok ? 'ok' : 'err');
-      setTimeout(() => refreshAll(false), 2500);
-    });
+      setMsg(msgId, res.ok ? res.data.message : (res.data.error || 'Download failed'), res.ok ? 'ok' : 'err');
+      setTimeout(() => refreshAll(false), 3000);
+    }
+    $('wizDownloadFwBtn').addEventListener('click', () => triggerFwDownload('wizMsg1'));
+    $('wizGateDownloadBtn').addEventListener('click', () => triggerFwDownload('wizMsg3'));
+    $('updateBtn').addEventListener('click', () => triggerFwDownload('actionMsg'));
+
+    async function triggerSwUpdate(msgId) {
+      setMsg(msgId, 'Checking GitHub for AstroDrive software updates…');
+      const res = await api('/api/action/update-software', { method: 'POST', body: '{}' });
+      setMsg(msgId, res.ok ? res.data.message : (res.data.error || 'Update check failed'), res.ok ? 'ok' : 'err');
+      setTimeout(() => refreshAll(false), 3000);
+    }
+    $('wizUpdateSwBtn').addEventListener('click', () => triggerSwUpdate('wizMsg1'));
+    $('updateSwBtn').addEventListener('click', () => triggerSwUpdate('actionMsg'));
 
     async function applyIndi(msgId) {
       setMsg(msgId, 'Applying INDI LX200 OnStep defaults…');
@@ -742,12 +916,18 @@
       refreshAll(false);
     });
 
-    $('wizFlashNowBtn').addEventListener('click', async () => {
-      setMsg('wizMsg3', 'Starting automatic flasher (takes ~30–60 seconds)…');
-      const res = await api('/api/action/provision', { method: 'POST', body: '{}' });
-      setMsg('wizMsg3', res.ok ? 'Flashing started! Watch the status box above.' : (res.data.error || 'Failed to start'), res.ok ? 'ok' : 'err');
+    async function triggerFlash(msgId) {
+      const selectedDev = $('wizUsbSelect').value || (latestStatus && latestStatus.device) || '';
+      setMsg(msgId, `Authorizing flash on ${selectedDev || 'detected board'} (takes ~30–60 seconds)…`);
+      const res = await api('/api/action/provision', {
+        method: 'POST',
+        body: JSON.stringify({ device: selectedDev, authorize_flash: true, remember_usb: true }),
+      });
+      setMsg(msgId, res.ok ? (res.data.message || `Started ${res.data.unit}`) : (res.data.error || 'Failed to start'), res.ok ? 'ok' : 'err');
       setTimeout(() => refreshAll(false), 1000);
-    });
+    }
+    $('wizFlashNowBtn').addEventListener('click', () => triggerFlash('wizMsg3'));
+    $('provisionBtn').addEventListener('click', () => triggerFlash('actionMsg'));
 
     $('wizTestBtn').addEventListener('click', async () => {
       setMsg('wizMsg3', 'Testing connection to OnStepX…');
@@ -796,34 +976,20 @@
       }
     });
 
-    $('updateBtn').addEventListener('click', async () => {
-      setMsg('actionMsg', 'Checking GitHub Releases for latest firmware…');
-      const res = await api('/api/action/update-cache', { method: 'POST', body: '{}' });
-      setMsg('actionMsg', res.ok ? res.data.message : (res.data.error || 'Update failed'), res.ok ? 'ok' : 'err');
-      setTimeout(() => refreshAll(false), 2000);
-    });
-
-    $('provisionBtn').addEventListener('click', async () => {
-      setMsg('actionMsg', 'Starting auto-provisioner (detect → fetch/compile → flash)…');
-      const res = await api('/api/action/provision', { method: 'POST', body: '{}' });
-      setMsg('actionMsg', res.ok ? `Started ${res.data.unit}` : (res.data.error || 'Failed to start'), res.ok ? 'ok' : 'err');
-      setTimeout(() => refreshAll(false), 1000);
-    });
-
     $('saveCfgBtn').addEventListener('click', async () => {
       const payload = {
         AUTO_FLASH: $('cfg_AUTO_FLASH').checked ? 'true' : 'false',
         AUTO_UPGRADE: $('cfg_AUTO_UPGRADE').checked ? 'true' : 'false',
+        AUTO_UPDATE_SOFTWARE: $('cfg_AUTO_UPDATE_SOFTWARE').checked ? 'true' : 'false',
         AUTO_COMPILE: $('cfg_AUTO_COMPILE').checked ? 'true' : 'false',
         ONLINE_CHECK_UPDATES: $('cfg_ONLINE_CHECK_UPDATES').checked ? 'true' : 'false',
         TARGET_CHIP: $('cfg_TARGET_CHIP').value,
-        GITHUB_REPO: $('cfg_GITHUB_REPO').value.trim(),
       };
       const res = await api('/api/config', { method: 'POST', body: JSON.stringify(payload) });
       setMsg('actionMsg', res.ok ? 'Settings saved.' : (res.data.error || 'Save failed'), res.ok ? 'ok' : 'err');
     });
 
-    // Open Setup Wizard by default on first visit; remember tab preference after finishing
+    initTokenFromUrl();
     const savedView = localStorage.getItem('astrodrive_view');
     const wizDone = localStorage.getItem('astrodrive_wizard_done') === '1';
     switchTab(savedView || (wizDone ? 'dash' : 'wizard'));

@@ -42,11 +42,47 @@ from probe_onstep import probe_port
 
 LOG = logging.getLogger("onstep-autoprovision")
 LOCK_PATH = Path("/run/lock/onstep-provision.lock")
+STATE_DIR = Path(os.environ.get("ONSTEP_STATE_DIR", "/var/lib/onstep-autoprovision"))
+STATUS_FILE = STATE_DIR / "provision-status.json"
+FLASH_ONCE_DIR = STATE_DIR / "flash-once"
 
 DEFAULT_CHIP_PROFILE_MAP = {
     "esp8266": "nodemcu-esp8266-tmc2208s",
     "esp32": "nodemcu-esp32-tmc2208s",
 }
+
+
+def write_provision_status(state: str, message: str, device: str = "", extra: Optional[dict[str, object]] = None) -> None:
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        payload: dict[str, object] = {
+            "state": state,
+            "message": message,
+            "device": device,
+            "updated_at_epoch": int(time.time()),
+        }
+        if extra:
+            payload.update(extra)
+        tmp = STATUS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, STATUS_FILE)
+    except OSError:
+        pass
+
+
+def consume_flash_once_ticket(device: str) -> bool:
+    ticket = FLASH_ONCE_DIR / os.path.basename(device)
+    try:
+        if ticket.is_file():
+            age = time.time() - ticket.stat().st_mtime
+            ticket.unlink(missing_ok=True)
+            if 0 <= age <= 300:
+                LOG.info("Consumed single-use flash authorization ticket for %s.", device)
+                return True
+            LOG.warning("Expired flash authorization ticket for %s (age=%.0fs); ignoring.", device, age)
+    except OSError as exc:
+        LOG.warning("Could not read/unlink flash-once ticket %s: %s", ticket, exc)
+    return False
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -426,18 +462,20 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="OnStepX multi-board NodeMCU auto-provisioner")
     parser.add_argument("--device", required=True, help="TTY device path (e.g., /dev/ttyUSB0)")
     parser.add_argument("--dry-run", action="store_true", help="Probe only; never flash or touch symlinks")
+    parser.add_argument("--allow-flash-once", action="store_true", help="Authorize flashing this device once even if AUTO_FLASH=false")
     args = parser.parse_args()
 
     device = args.device
     if not os.path.exists(device):
         LOG.error("Device %s does not exist.", device)
+        write_provision_status("error", f"Device {device} does not exist.", device)
         return 1
 
     target_chip_cfg = os.environ.get("TARGET_CHIP", "auto").strip().lower()
     auto_flash = env_bool("AUTO_FLASH", default=False)
     auto_upgrade = env_bool("AUTO_UPGRADE", default=False)
     online_check = env_bool("ONLINE_CHECK_UPDATES", default=True)
-    auto_compile = env_bool("AUTO_COMPILE", default=True)
+    auto_compile = env_bool("AUTO_COMPILE", default=False)
     prefer_live_compile = env_bool("PREFER_LIVE_COMPILE", default=False)
     firmware_root = Path(os.environ.get("FIRMWARE_DIR", "/opt/onstep-autoprovision/firmware"))
     symlink_path = os.environ.get("SYMLINK_PATH", "/dev/onstep")
@@ -449,7 +487,10 @@ def main() -> int:
     indi_device_name = os.environ.get("INDI_DEVICE_NAME", "LX200 OnStep")
     chip_profile_map = parse_chip_profile_map()
 
-    if not check_usb_allowlist(device):
+    flash_once_authorized = args.allow_flash_once or consume_flash_once_ticket(device)
+
+    if not flash_once_authorized and not check_usb_allowlist(device):
+        write_provision_status("skipped_allowlist", f"Device {device} is not in ALLOWED_USB_SERIALS/ALLOWED_USB_PATHS.", device)
         return 0
 
     LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -475,22 +516,22 @@ def main() -> int:
                         publish_symlink(device, symlink_path)
                     return 0
                 if comm in {"gpsd", "ModemManager"}:
-                    LOG.error(
-                        "Device %s is hijacked by %s (PID %d)! Set USBAUTO=\"false\" in /etc/default/gpsd "
-                        "and ensure ID_MM_DEVICE_IGNORE=1 in udev rules.",
-                        device,
-                        comm,
-                        pid,
+                    msg = (
+                        f"Device {device} is hijacked by {comm} (PID {pid}). "
+                        "Ensure USBAUTO=\"false\" in /etc/default/gpsd and ID_MM_DEVICE_IGNORE=1 in udev rules."
                     )
+                    LOG.error("%s", msg)
+                    write_provision_status("error", msg, device)
                     return 2
             LOG.error("Device %s is busy (held by %s); aborting.", device, holders)
+            write_provision_status("busy", f"Device {device} is busy ({holders}).", device)
             return 2
 
-        LOG.info("Waiting %.1fs for NodeMCU boot settle on %s...", boot_settle, device)
+        LOG.info("Waiting %.1fs for controller boot settle on %s...", boot_settle, device)
         time.sleep(boot_settle)
 
         info = probe_any_baud(device, probe_bauds)
-        if info and not auto_upgrade:
+        if info and not auto_upgrade and not flash_once_authorized:
             LOG.info(
                 "Detected working %s v%s (built %s) on %s @ %s baud.",
                 info["product"],
@@ -501,6 +542,12 @@ def main() -> int:
             )
             if not args.dry_run:
                 publish_symlink(device, symlink_path)
+                write_provision_status(
+                    "ready",
+                    f"Ready: {info['product']} v{info['version']} @ {info['baud']} baud.",
+                    device,
+                    {"version": info["version"], "baud": info["baud"]},
+                )
                 if indi_auto_connect:
                     notify_indi_connect(indi_device_name)
             return 0
@@ -513,34 +560,47 @@ def main() -> int:
             )
             return 0 if info else 3
 
-        if not auto_flash:
+        # S4 + M3: Allow flashing if:
+        #   - AUTO_FLASH=true, OR
+        #   - Explicitly authorized once via the authenticated Setup Wizard, OR
+        #   - Board is ALREADY confirmed as OnStepX and AUTO_UPGRADE=true.
+        can_flash = auto_flash or flash_once_authorized or (bool(info) and auto_upgrade)
+        if not can_flash:
             if info:
-                LOG.info("Running OnStepX v%s and AUTO_FLASH=false; publishing %s.", info["version"], symlink_path)
+                LOG.info("Running OnStepX v%s and AUTO_UPGRADE=false; publishing %s.", info["version"], symlink_path)
                 publish_symlink(device, symlink_path)
+                write_provision_status("ready", f"Ready: {info['product']} v{info['version']}.", device)
                 return 0
-            LOG.warning(
-                "No OnStepX response on %s and AUTO_FLASH=false; refusing to flash. "
-                "Set AUTO_FLASH=true in /etc/onstep-autoprovision/config.env to enable.",
-                device,
+            msg = (
+                f"Detected non-OnStep board on {device}. Auto-flash is off by default for safety; "
+                "click 'Flash OnStepX to This Board' in the Setup Wizard to flash it."
             )
-            return 1
+            LOG.info("%s", msg)
+            write_provision_status("awaiting_confirmation", msg, device)
+            return 0
 
-        # Identify the attached random NodeMCU silicon (ESP8266 vs ESP32)
+        # Identify the attached Espressif MCU silicon (ESP8266 vs ESP32)
         detected_chip = detect_esp_chip(device, expected_chip=target_chip_cfg)
         if not detected_chip:
-            LOG.error("Refusing to flash %s: could not identify supported Espressif chip.", device)
+            msg = (
+                f"Could not identify an ESP32/ESP8266 on {device}. "
+                "If this is an ESP32, hold the BOOT button for 2 seconds and click Flash again."
+            )
+            LOG.error("%s", msg)
+            write_provision_status("detect_failed", msg, device)
             return 1
 
         profile = chip_profile_map.get(detected_chip)
         if not profile:
-            LOG.error(
-                "No firmware profile mapped for detected chip '%s' (map: %s).",
-                detected_chip,
-                chip_profile_map,
+            msg = (
+                f"Detected '{detected_chip}' on {device}, which is not supported by AstroDrive's "
+                f"TMC2208S profiles (supported: {', '.join(sorted(chip_profile_map))})."
             )
+            LOG.error("%s", msg)
+            write_provision_status("unsupported_chip", msg, device, {"chip": detected_chip})
             return 1
 
-        LOG.info("Selected best-fitting firmware profile '%s' for chip '%s'.", profile, detected_chip)
+        LOG.info("Selected firmware profile '%s' for chip '%s'.", profile, detected_chip)
 
         bin_path, manifest = resolve_firmware_bundle(
             profile=profile,
@@ -550,7 +610,12 @@ def main() -> int:
             prefer_live_compile=prefer_live_compile,
         )
         if not bin_path or not manifest:
-            LOG.error("Unable to fetch, locate, or compile verified firmware for profile '%s'.", profile)
+            msg = (
+                f"No cached firmware found for '{profile}'. Connect the Pi to the internet "
+                "and click 'Download Firmware' in Setup Wizard Step 1."
+            )
+            LOG.error("%s", msg)
+            write_provision_status("missing_firmware", msg, device, {"chip": detected_chip, "profile": profile})
             if info:
                 LOG.warning("Falling back to existing OnStepX v%s on %s.", info["version"], device)
                 publish_symlink(device, symlink_path)
@@ -558,9 +623,10 @@ def main() -> int:
             return 1
 
         target_version = str(manifest.get("firmware_version", "")).strip()
-        if info and target_version and info["version"] == target_version:
+        if info and target_version and info["version"] == target_version and not flash_once_authorized:
             LOG.info("Board already runs latest OnStepX v%s (%s); skipping flash.", target_version, profile)
             publish_symlink(device, symlink_path)
+            write_provision_status("ready", f"Already up to date: OnStepX v{target_version} ({profile}).", device)
             if indi_auto_connect:
                 notify_indi_connect(indi_device_name)
             return 0
@@ -577,7 +643,9 @@ def main() -> int:
             primary_baud=flash_baud,
             fallback_baud=flash_baud_fallback,
         ):
-            LOG.error("Firmware flash failed on %s.", device)
+            msg = f"Flashing {profile} failed on {device}. Check the USB cable (or hold BOOT on ESP32) and retry."
+            LOG.error("%s", msg)
+            write_provision_status("flash_failed", msg, device, {"chip": detected_chip, "profile": profile})
             return 1
 
         LOG.info("Waiting 3.0s for freshly flashed OnStepX (%s) to boot...", profile)
@@ -585,7 +653,9 @@ def main() -> int:
 
         post_info = probe_any_baud(device, probe_bauds)
         if not post_info:
-            LOG.error("Post-flash verification failed: no :GVP# response on %s.", device)
+            msg = f"Flashed {profile} on {device}, but OnStepX did not answer :GVP# after reset."
+            LOG.error("%s", msg)
+            write_provision_status("verify_failed", msg, device, {"chip": detected_chip, "profile": profile})
             return 1
 
         LOG.info(
@@ -596,6 +666,12 @@ def main() -> int:
             post_info["baud"],
         )
         publish_symlink(device, symlink_path)
+        write_provision_status(
+            "ready",
+            f"Flashed & verified: {post_info['product']} v{post_info['version']} ({profile}) @ {post_info['baud']} baud.",
+            device,
+            {"chip": detected_chip, "profile": profile, "version": post_info["version"]},
+        )
         if indi_auto_connect:
             notify_indi_connect(indi_device_name)
         return 0

@@ -12,9 +12,9 @@ on:
   workflow_dispatch:
     inputs:
       onstepx_ref:
-        description: 'Upstream hjd1964/OnStepX git branch or tag'
+        description: 'Upstream hjd1964/OnStepX git commit SHA, tag, or branch (leave blank to use pinned firmware/onstepx.ref)'
         required: false
-        default: 'main'
+        default: ''
       publish_release:
         description: 'Publish compiled .bin + manifest assets to GitHub Releases'
         required: false
@@ -50,7 +50,7 @@ jobs:
 
       - name: Compile all OnStepX NodeMCU profiles (ESP8266 + ESP32)
         env:
-          ONSTEPX_REF: ${{ github.event.inputs.onstepx_ref || 'main' }}
+          ONSTEPX_REF: ${{ github.event.inputs.onstepx_ref }}
         run: |
           chmod +x firmware/build.sh
           ./firmware/build.sh --all

@@ -8,27 +8,27 @@ on:
         required: true
         default: 'https://downloads.raspberrypi.com/raspios_arm64/images/raspios_arm64-2025-10-02/2025-10-01-raspios-trixie-arm64.img.xz'
       onstepx_ref:
-        description: 'Upstream hjd1964/OnStepX branch or tag to bake in'
+        description: 'Upstream hjd1964/OnStepX commit SHA, branch, or tag (blank = pinned firmware/onstepx.ref)'
         required: false
-        default: 'main'
+        default: ''
       install_arduino_cli_in_image:
         description: 'Bake arduino-cli + ESP8266/ESP32 cores into image for on-Pi live compilation'
         required: false
         type: boolean
-        default: true
+        default: false
       enable_auto_flash:
-        description: 'Enable AUTO_FLASH=true out of the box in the image'
+        description: 'Enable unattended AUTO_FLASH=true out of the box (leave false for safer click-to-flash wizard)'
         required: false
         type: boolean
-        default: true
+        default: false
       hotspot_ssid:
-        description: 'Optional default dark-sky hotspot SSID (leave blank to skip)'
+        description: 'Optional default dark-sky hotspot SSID (requires hotspot_password >= 8 chars)'
         required: false
-        default: 'AstroPi-OnStep'
+        default: ''
       hotspot_password:
-        description: 'Dark-sky hotspot WPA2 password (min 8 chars)'
+        description: 'Optional dark-sky hotspot WPA2 password (min 8 chars; leave blank to configure in Setup Wizard)'
         required: false
-        default: 'clearSkies2026'
+        default: ''
 
 permissions:
   contents: write
