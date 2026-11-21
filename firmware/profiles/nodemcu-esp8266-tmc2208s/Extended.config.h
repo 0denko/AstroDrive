@@ -10,6 +10,11 @@
   #define SERIAL_A                    Serial
 #endif
 
+// Standalone TMC2208S drivers do not use UART; avoid pulling in SoftwareSerial.
+#ifndef SERIAL_TMC
+  #define SERIAL_TMC                  OFF
+#endif
+
 // Active-LOW enable polarity for TMC2208 StepStick carriers
 #ifndef AXIS1_ENABLE_STATE
   #define AXIS1_ENABLE_STATE          LOW

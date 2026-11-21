@@ -4,6 +4,12 @@
   #define SERIAL_A                    Serial
 #endif
 
+// Standalone TMC2208S drivers do not use UART; override TmcStepDirDriver.h's
+// SoftSerial default so ESP32 does not try to include <SoftwareSerial.h>.
+#ifndef SERIAL_TMC
+  #define SERIAL_TMC                  OFF
+#endif
+
 #ifndef AXIS1_ENABLE_STATE
   #define AXIS1_ENABLE_STATE          LOW
 #endif
