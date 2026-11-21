@@ -3,31 +3,41 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AstroDrive OnStepX Provisioner — Astroberry Overlay</title>
+  <title>AstroDrive — Guided Setup &amp; Mount Controller</title>
   <style>
     :root {
       --bg: #0b0f17;
       --card: #131a27;
+      --card2: #182234;
       --border: #243047;
       --text: #e6edf7;
       --muted: #8ea0bc;
       --accent: #38bdf8;
+      --accent-bg: rgba(56, 189, 248, 0.14);
       --ok: #22c55e;
+      --ok-bg: rgba(34, 197, 94, 0.12);
       --warn: #f59e0b;
+      --warn-bg: rgba(245, 158, 11, 0.13);
       --err: #ef4444;
+      --err-bg: rgba(239, 68, 68, 0.13);
       --btn-bg: #1c273b;
       --btn-hover: #263550;
     }
     body.night-vision {
       --bg: #080000;
       --card: #140202;
+      --card2: #1c0404;
       --border: #3d0909;
       --text: #ff6b6b;
       --muted: #a83c3c;
       --accent: #ff3b3b;
+      --accent-bg: rgba(255, 59, 59, 0.14);
       --ok: #ff5555;
+      --ok-bg: rgba(255, 85, 85, 0.12);
       --warn: #ff7b00;
+      --warn-bg: rgba(255, 123, 0, 0.14);
       --err: #ff1e1e;
+      --err-bg: rgba(255, 30, 30, 0.14);
       --btn-bg: #260505;
       --btn-hover: #3b0a0a;
     }
@@ -39,7 +49,7 @@
       background: var(--bg);
       color: var(--text);
       font-size: 14px;
-      line-height: 1.45;
+      line-height: 1.5;
     }
     .wrap { max-width: 820px; margin: 0 auto; display: grid; gap: 12px; }
     header {
@@ -47,129 +57,432 @@
       flex-wrap: wrap; gap: 8px;
     }
     h1 { font-size: 18px; margin: 0; display: flex; align-items: center; gap: 8px; }
-    .dot {
-      width: 10px; height: 10px; border-radius: 50%; display: inline-block;
-      background: var(--muted);
-    }
+    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: var(--muted); flex-shrink: 0; }
     .dot.ok { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
     .dot.warn { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
     .dot.err { background: var(--err); box-shadow: 0 0 8px var(--err); }
+
+    .tabs {
+      display: inline-flex; background: var(--card); border: 1px solid var(--border);
+      border-radius: 10px; padding: 3px; gap: 4px;
+    }
+    .tab-btn {
+      background: transparent; border: 0; border-radius: 7px; padding: 7px 14px;
+      color: var(--muted); font-weight: 600; font-size: 13px; cursor: pointer;
+    }
+    .tab-btn.active { background: var(--accent-bg); color: var(--accent); }
+
     .card {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 12px 14px;
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 16px;
     }
     .card h2 {
-      font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em;
+      font-size: 15px; margin: 0 0 6px 0; color: var(--text);
+    }
+    .card h3 {
+      font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em;
       color: var(--muted); margin: 0 0 10px 0;
     }
+    .muted { color: var(--muted); font-size: 13px; margin: 0 0 12px 0; }
+
+    /* Wizard stepper */
+    .stepper {
+      display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px;
+    }
+    .step-pill {
+      display: flex; flex-direction: column; align-items: center; gap: 3px;
+      padding: 8px 4px; border-radius: 10px; border: 1px solid var(--border);
+      background: var(--card); color: var(--muted); font-size: 11.5px;
+      font-weight: 600; cursor: pointer; text-align: center;
+    }
+    .step-pill .num {
+      width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
+      font-size: 12px; background: var(--card2); border: 1px solid var(--border);
+    }
+    .step-pill.active { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
+    .step-pill.active .num { background: var(--accent); color: #08101c; border-color: var(--accent); }
+    .step-pill.done { border-color: var(--ok); color: var(--ok); }
+    .step-pill.done .num { background: var(--ok); color: #052010; border-color: var(--ok); }
+
+    .step-panel { display: none; }
+    .step-panel.active { display: block; }
+
+    .check-list { display: grid; gap: 8px; margin: 12px 0; }
+    .check-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);
+      background: var(--card2); flex-wrap: wrap;
+    }
+    .check-row.ok { border-color: rgba(34, 197, 94, 0.45); background: var(--ok-bg); }
+    .check-row.warn { border-color: rgba(245, 158, 11, 0.5); background: var(--warn-bg); }
+    .check-row.err { border-color: rgba(239, 68, 68, 0.55); background: var(--err-bg); }
+    .check-title { font-weight: 600; font-size: 14px; }
+    .check-sub { font-size: 12.5px; color: var(--muted); }
+
+    .banner {
+      padding: 14px 16px; border-radius: 10px; border: 1px solid var(--border);
+      background: var(--card2); margin: 12px 0;
+    }
+    .banner.ok { border-color: var(--ok); background: var(--ok-bg); }
+    .banner.warn { border-color: var(--warn); background: var(--warn-bg); }
+    .banner.err { border-color: var(--err); background: var(--err-bg); }
+    .banner-title { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+
     .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); gap: 8px; }
     .kv { background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
     .kv .k { font-size: 11px; color: var(--muted); text-transform: uppercase; }
     .kv .v { font-size: 14px; font-weight: 600; margin-top: 2px; word-break: break-all; }
-    .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .nav-bar {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border);
+      gap: 8px; flex-wrap: wrap;
+    }
     button {
       background: var(--btn-bg); color: var(--text);
       border: 1px solid var(--border); border-radius: 8px;
-      padding: 8px 12px; font-size: 13px; font-weight: 600;
-      cursor: pointer; transition: background 0.15s;
+      padding: 9px 14px; font-size: 13.5px; font-weight: 600;
+      cursor: pointer; transition: background 0.15s, border-color 0.15s;
     }
     button:hover { background: var(--btn-hover); }
-    button.primary { border-color: var(--accent); color: var(--accent); }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
-    .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
-    label { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; }
-    select, input[type="text"] {
-      background: var(--bg); color: var(--text);
-      border: 1px solid var(--border); border-radius: 6px;
-      padding: 6px 8px; font-size: 13px; width: 100%;
+    button.primary {
+      background: var(--accent); color: #071320; border-color: var(--accent);
     }
+    button.primary:hover { filter: brightness(1.08); }
+    button.outline { border-color: var(--accent); color: var(--accent); background: transparent; }
+    button.sm { padding: 6px 10px; font-size: 12.5px; }
+    button:disabled { opacity: 0.48; cursor: not-allowed; }
+
+    .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
     .field { display: flex; flex-direction: column; gap: 4px; }
-    .field span { font-size: 11px; color: var(--muted); text-transform: uppercase; }
-    pre {
-      margin: 0; background: #05080f; color: #c7d4e8;
+    .field label-txt, .field span { font-size: 12px; color: var(--muted); font-weight: 600; }
+    select, input[type="text"], input[type="password"] {
+      background: var(--bg); color: var(--text);
       border: 1px solid var(--border); border-radius: 8px;
-      padding: 10px; font-size: 11.5px; max-height: 280px;
+      padding: 8px 10px; font-size: 14px; width: 100%;
+    }
+    label.toggle {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--card2); font-size: 13px; cursor: pointer;
+    }
+    label.safety-item {
+      display: flex; align-items: flex-start; gap: 10px;
+      padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--card2); font-size: 13.5px; cursor: pointer;
+    }
+    label.safety-item input { margin-top: 3px; transform: scale(1.2); flex-shrink: 0; }
+
+    .svg-box {
+      background: #0d1117; border: 1px solid var(--border); border-radius: 10px;
+      padding: 8px; margin: 10px 0; overflow: hidden;
+    }
+    .svg-box img { width: 100%; height: auto; display: block; border-radius: 6px; }
+
+    .steps-ol { margin: 8px 0 12px 0; padding-left: 20px; display: grid; gap: 6px; }
+    .steps-ol li { font-size: 14px; }
+
+    pre {
+      margin: 8px 0 0 0; background: #05080f; color: #c7d4e8;
+      border: 1px solid var(--border); border-radius: 8px;
+      padding: 10px; font-size: 11.5px; max-height: 260px;
       overflow: auto; white-space: pre-wrap; word-break: break-word;
     }
     body.night-vision pre { background: #040000; color: #ff5c5c; }
-    .msg { font-size: 12px; color: var(--accent); min-height: 18px; margin-top: 6px; }
+    details summary { cursor: pointer; color: var(--accent); font-weight: 600; font-size: 13px; }
+
+    .msg { font-size: 13px; color: var(--accent); min-height: 18px; margin-top: 8px; font-weight: 500; }
+    .msg.err { color: var(--err); }
+    .msg.ok { color: var(--ok); }
+
     table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
     th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
     th { color: var(--muted); font-weight: 600; }
+
+    .hidden { display: none !important; }
+    @media (max-width: 520px) {
+      .step-pill span.lbl { display: none; }
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
     <header>
-      <h1><span id="statusDot" class="dot"></span> AstroDrive OnStepX Provisioner</h1>
+      <h1><span id="statusDot" class="dot"></span> AstroDrive</h1>
       <div class="actions">
-        <button id="nightBtn" type="button">🌙 Night Vision</button>
-        <button id="refreshBtn" type="button">↻ Refresh</button>
+        <div class="tabs">
+          <button id="tabWizard" class="tab-btn active" type="button">🧭 Setup Wizard</button>
+          <button id="tabDash" class="tab-btn" type="button">⚙️ Dashboard</button>
+        </div>
+        <button id="nightBtn" class="sm" type="button">🌙 Night Vision</button>
       </div>
     </header>
 
-    <section class="card">
-      <h2>Controller &amp; INDI Status</h2>
-      <div class="grid2">
-        <div class="kv"><div class="k">INDI Symlink</div><div class="v" id="symlinkVal">—</div></div>
-        <div class="kv"><div class="k">USB Device</div><div class="v" id="deviceVal">—</div></div>
-        <div class="kv"><div class="k">Mount / Probe</div><div class="v" id="probeVal">—</div></div>
-        <div class="kv"><div class="k">INDI Lock</div><div class="v" id="indiVal">—</div></div>
+    <!-- ==================== GUIDED SETUP WIZARD ==================== -->
+    <div id="wizardView">
+      <div class="stepper" role="tablist">
+        <button class="step-pill active" data-step="1" type="button"><span class="num">1</span><span class="lbl">System</span></button>
+        <button class="step-pill" data-step="2" type="button"><span class="num">2</span><span class="lbl">Wi-Fi</span></button>
+        <button class="step-pill" data-step="3" type="button"><span class="num">3</span><span class="lbl">Flash Board</span></button>
+        <button class="step-pill" data-step="4" type="button"><span class="num">4</span><span class="lbl">Wiring</span></button>
+        <button class="step-pill" data-step="5" type="button"><span class="num">5</span><span class="lbl">Connect</span></button>
       </div>
-      <div class="actions" style="margin-top: 10px;">
-        <button class="primary" id="probeBtn" type="button">🔍 Probe LX200 (:GVP#)</button>
-        <button id="updateBtn" type="button">☁️ Check Online Releases</button>
-        <button id="provisionBtn" type="button">⚡ Provision / Compile &amp; Flash</button>
-      </div>
-      <div class="msg" id="actionMsg"></div>
-    </section>
 
-    <section class="card">
-      <h2>Cached Firmware Profiles</h2>
-      <table>
-        <thead><tr><th>Profile</th><th>Chip</th><th>Version</th><th>Built (UTC)</th></tr></thead>
-        <tbody id="profilesBody"><tr><td colspan="4" style="color:var(--muted)">Loading…</td></tr></tbody>
-      </table>
-    </section>
+      <!-- STEP 1: System Check -->
+      <section class="card step-panel active" data-step="1" style="margin-top: 12px;">
+        <h2>Step 1 of 5 — Welcome &amp; Quick System Check</h2>
+        <p class="muted">AstroDrive automatically checked your Raspberry Pi. Everything green below is already done for you.</p>
 
-    <section class="card">
-      <h2>Provisioning Settings (/etc/onstep-autoprovision/config.env)</h2>
-      <div class="form-grid">
-        <label><span>Auto-Flash Blank Boards</span><input type="checkbox" id="cfg_AUTO_FLASH" /></label>
-        <label><span>Auto-Upgrade Existing</span><input type="checkbox" id="cfg_AUTO_UPGRADE" /></label>
-        <label><span>Auto-Compile On-Pi (Online)</span><input type="checkbox" id="cfg_AUTO_COMPILE" /></label>
-        <label><span>Check GitHub Releases</span><input type="checkbox" id="cfg_ONLINE_CHECK_UPDATES" /></label>
-        <div class="field">
-          <span>Target MCU Detection</span>
-          <select id="cfg_TARGET_CHIP">
-            <option value="auto">auto (Any NodeMCU: ESP8266 / ESP32)</option>
-            <option value="esp8266">esp8266 only</option>
-            <option value="esp32">esp32 only</option>
-          </select>
+        <div class="check-list">
+          <div class="check-row" id="chkPower">
+            <div>
+              <div class="check-title" id="chkPowerTitle">Checking Raspberry Pi power…</div>
+              <div class="check-sub" id="chkPowerSub">Verifying 5 V rail stability</div>
+            </div>
+          </div>
+
+          <div class="check-row" id="chkFirmware">
+            <div>
+              <div class="check-title" id="chkFirmwareTitle">Checking OnStepX firmware files…</div>
+              <div class="check-sub" id="chkFirmwareSub">ESP32-WROOM &amp; NodeMCU ESP8266 profiles</div>
+            </div>
+            <button id="wizDownloadFwBtn" class="sm outline" type="button">☁️ Download Firmware</button>
+          </div>
+
+          <div class="check-row" id="chkIndi">
+            <div>
+              <div class="check-title" id="chkIndiTitle">Checking KStars / Ekos (INDI) defaults…</div>
+              <div class="check-sub" id="chkIndiSub">Sets LX200 OnStep to /dev/onstep @ 9600 baud</div>
+            </div>
+            <button id="wizApplyIndiBtn" class="sm outline" type="button">🔧 Apply Defaults</button>
+          </div>
         </div>
-        <div class="field">
-          <span>GitHub Repo (owner/repo)</span>
-          <input type="text" id="cfg_GITHUB_REPO" placeholder="0denko/AstroDrive" />
-        </div>
-      </div>
-      <div class="actions" style="margin-top: 10px;">
-        <button class="primary" id="saveCfgBtn" type="button">💾 Save Settings</button>
-      </div>
-    </section>
 
-    <section class="card">
-      <h2>Live Provisioning &amp; Compile Logs</h2>
-      <pre id="logsPre">Loading logs…</pre>
-    </section>
+        <div class="msg" id="wizMsg1"></div>
+
+        <div class="nav-bar">
+          <span class="muted" style="margin:0;">Takes ~3 minutes total</span>
+          <button class="primary" onclick="goStep(2)" type="button">Next: Wi-Fi &amp; Field Hotspot →</button>
+        </div>
+      </section>
+
+      <!-- STEP 2: Wi-Fi & Dark-Sky Hotspot -->
+      <section class="card step-panel" data-step="2" style="margin-top: 12px;">
+        <h2>Step 2 of 5 — Home Wi-Fi &amp; Dark-Sky Field Hotspot (Optional)</h2>
+        <p class="muted">
+          At home, your Pi uses your home Wi-Fi. When you take your telescope out under dark skies,
+          the Pi automatically creates its own Wi-Fi hotspot so your phone or laptop can connect directly.
+        </p>
+
+        <div class="banner" id="wifiStatusBanner">
+          <div class="banner-title" id="wifiStatusTitle">Checking Wi-Fi…</div>
+          <div class="check-sub" id="wifiStatusSub"></div>
+        </div>
+
+        <div class="form-grid">
+          <div class="field">
+            <span>Home Wi-Fi Name (optional — leave blank to keep current)</span>
+            <input type="text" id="wizHomeSsid" placeholder="e.g. MyHomeWiFi" autocomplete="off" />
+          </div>
+          <div class="field">
+            <span>Home Wi-Fi Password</span>
+            <input type="password" id="wizHomePass" placeholder="Home Wi-Fi password" autocomplete="off" />
+          </div>
+          <div class="field">
+            <span>Dark-Sky Field Hotspot Name</span>
+            <input type="text" id="wizApSsid" value="AstroPi-OnStep" autocomplete="off" />
+          </div>
+          <div class="field">
+            <span>Field Hotspot Password (8+ characters)</span>
+            <input type="text" id="wizApPass" value="clearSkies2026" autocomplete="off" />
+          </div>
+        </div>
+
+        <div class="actions" style="margin-top: 12px;">
+          <button class="primary" id="wizSaveWifiBtn" type="button">📶 Save Wi-Fi &amp; Field Hotspot</button>
+        </div>
+        <div class="msg" id="wizMsg2"></div>
+
+        <div class="nav-bar">
+          <button onclick="goStep(1)" type="button">← Back</button>
+          <button class="primary" onclick="goStep(3)" type="button">Next: Plug In &amp; Flash Board →</button>
+        </div>
+      </section>
+
+      <!-- STEP 3: Plug In & Auto-Flash -->
+      <section class="card step-panel" data-step="3" style="margin-top: 12px;">
+        <h2>Step 3 of 5 — Plug In Your ESP32 or NodeMCU</h2>
+        <p class="muted">
+          Do this <strong>on your desk first</strong> with just the bare microcontroller board (no 12 V power, drivers, or motors attached yet).
+          Plug it into any Raspberry Pi USB port using a short data-capable USB cable — AstroDrive detects the chip and installs OnStepX automatically.
+        </p>
+
+        <div class="banner" id="flashBanner">
+          <div class="banner-title" id="flashBannerTitle">Waiting for your ESP32 or NodeMCU…</div>
+          <div class="check-sub" id="flashBannerSub">Plug the board into a Raspberry Pi USB port now.</div>
+        </div>
+
+        <div class="actions">
+          <button class="primary" id="wizFlashNowBtn" type="button">⚡ Flash / Retry Now</button>
+          <button id="wizTestBtn" type="button">🔍 Test Connection</button>
+        </div>
+
+        <p class="check-sub" style="margin-top: 10px;">
+          💡 <strong>ESP32 tip:</strong> Some ESP32 boards need you to hold the tiny <strong>BOOT</strong> button on the board for 2 seconds right after plugging it in.
+        </p>
+
+        <div class="msg" id="wizMsg3"></div>
+
+        <details style="margin-top: 10px;">
+          <summary>Show live technical log</summary>
+          <pre id="wizLogsPre">Loading logs…</pre>
+        </details>
+
+        <div class="nav-bar">
+          <button onclick="goStep(2)" type="button">← Back</button>
+          <button class="primary" onclick="goStep(4)" type="button">Next: Wire Drivers &amp; Motors →</button>
+        </div>
+      </section>
+
+      <!-- STEP 4: Wiring & Pre-Power Checklist -->
+      <section class="card step-panel" data-step="4" style="margin-top: 12px;">
+        <h2>Step 4 of 5 — Wire the Drivers, Power &amp; Motors</h2>
+        <p class="muted">
+          <strong>Unplug USB before wiring.</strong> Choose your board below to view the exact diagram, then tick each safety check before turning on power.
+        </p>
+
+        <div class="actions">
+          <button id="btnBoardEsp32" class="primary sm" type="button">ESP32-WROOM (Recommended)</button>
+          <button id="btnBoardEsp8266" class="sm" type="button">NodeMCU ESP8266 (Backup)</button>
+          <a id="openSvgLink" href="docs/wiring-esp32-tmc2208.svg" target="_blank" rel="noopener" style="color:var(--accent); font-size:12.5px; margin-left:auto;">Open full-size diagram ↗</a>
+        </div>
+
+        <div class="svg-box">
+          <img id="wiringSvgImg" src="docs/wiring-esp32-tmc2208.svg" alt="AstroDrive Wiring Diagram" />
+        </div>
+
+        <div class="check-list">
+          <label class="safety-item"><input type="checkbox" data-chk="1" /><span><strong>USB is unplugged</strong> while making all wire connections.</span></label>
+          <label class="safety-item"><input type="checkbox" data-chk="2" /><span>On both TMC2208 drivers: <strong>MS1 + MS2 → VIO (3.3 V)</strong>, <strong>PDN + CLK → GND</strong>, and <strong>10 kΩ pull-up on EN → VIO</strong>. <em>(No pull-up on ESP32 GPIO12!)</em></span></label>
+          <label class="safety-item"><input type="checkbox" data-chk="3" /><span><strong>100 µF (≥ 25 V) capacitor</strong> fitted across <strong>VM–GND</strong> at each driver, and all grounds (12 V PSU, drivers, MCU, Pi) are tied together.</span></label>
+          <label class="safety-item"><input type="checkbox" data-chk="4" /><span>With <strong>motors unplugged</strong> and 12 V on, measured <strong>Vref</strong> on both drivers is set to <strong>~0.35 V</strong> (never above 0.71 V).</span></label>
+          <label class="safety-item"><input type="checkbox" data-chk="5" /><span>Motor coil pairs verified with a multimeter: Coil 1 → <strong>M1A + M1B</strong>, Coil 2 → <strong>M2A + M2B</strong> (never pair adjacent M2A + M1A).</span></label>
+          <label class="safety-item"><input type="checkbox" data-chk="6" /><span><strong>Power-on order:</strong> Turn on <strong>12 V power first</strong>, then plug the ESP32/NodeMCU USB into the Pi.</span></label>
+        </div>
+
+        <div class="nav-bar">
+          <button onclick="goStep(3)" type="button">← Back</button>
+          <button class="primary" onclick="goStep(5)" type="button">Next: Connect &amp; Finish →</button>
+        </div>
+      </section>
+
+      <!-- STEP 5: Connect in KStars / Ekos & Finish -->
+      <section class="card step-panel" data-step="5" style="margin-top: 12px;">
+        <h2>Step 5 of 5 — Connect Your Telescope in KStars / Ekos</h2>
+        <p class="muted">
+          AstroDrive already pre-configured <strong>LX200 OnStep</strong> to use <code>/dev/onstep</code> at <code>9600</code> baud — just pick the driver and click Connect:
+        </p>
+
+        <ol class="steps-ol">
+          <li>Close this panel (or go to <strong><code>http://astroberry.local</code></strong>) and open <strong>KStars → Ekos</strong>.</li>
+          <li>In your Ekos profile, select <strong>Mount: <code>LX200 OnStep</code></strong> (optional: add <strong>Aux: <code>SkySafari</code></strong> to steer from your phone on port <code>9624</code>).</li>
+          <li>Click <strong>Start Ekos</strong>, then click <strong>Connect</strong> on <code>LX200 OnStep</code>.</li>
+          <li><strong>Bench-test off the telescope first:</strong> tap N/S/E/W slew arrows in Ekos and confirm both motors turn smoothly and quietly.</li>
+        </ol>
+
+        <div class="banner">
+          <div class="banner-title">🕒 Dark-Sky Clock Sync (No Internet Needed)</div>
+          <div class="check-sub">Pi clock: <strong id="piClockVal">—</strong></div>
+          <div class="actions" style="margin-top: 10px;">
+            <button id="wizSyncTimeBtn" class="outline sm" type="button">🕒 Sync Pi Clock from This Phone/Laptop</button>
+            <button id="wizReapplyIndiBtn" class="sm" type="button">🔧 Re-apply INDI Defaults</button>
+          </div>
+        </div>
+
+        <div class="msg" id="wizMsg5"></div>
+
+        <div class="nav-bar">
+          <button onclick="goStep(4)" type="button">← Back</button>
+          <button class="primary" id="wizFinishBtn" type="button">✅ Done — Open Dashboard</button>
+        </div>
+      </section>
+    </div>
+
+    <!-- ==================== DASHBOARD / ADVANCED VIEW ==================== -->
+    <div id="dashView" class="hidden" style="display: grid; gap: 12px;">
+      <section class="card">
+        <h3>Controller &amp; INDI Status</h3>
+        <div class="grid2">
+          <div class="kv"><div class="k">INDI Symlink</div><div class="v" id="symlinkVal">—</div></div>
+          <div class="kv"><div class="k">USB Device</div><div class="v" id="deviceVal">—</div></div>
+          <div class="kv"><div class="k">Mount / Probe</div><div class="v" id="probeVal">—</div></div>
+          <div class="kv"><div class="k">INDI Lock</div><div class="v" id="indiVal">—</div></div>
+          <div class="kv"><div class="k">Pi Power Health</div><div class="v" id="powerVal">—</div></div>
+          <div class="kv"><div class="k">Pi Clock (UTC)</div><div class="v" id="clockVal">—</div></div>
+        </div>
+        <div class="actions" style="margin-top: 10px;">
+          <button class="outline" id="probeBtn" type="button">🔍 Probe LX200 (:GVP#)</button>
+          <button id="updateBtn" type="button">☁️ Check Online Releases</button>
+          <button id="provisionBtn" type="button">⚡ Flash / Provision Now</button>
+          <button id="dashSyncTimeBtn" type="button">🕒 Sync Pi Clock</button>
+          <button id="refreshBtn" type="button">↻ Refresh</button>
+        </div>
+        <div class="msg" id="actionMsg"></div>
+      </section>
+
+      <section class="card">
+        <h3>Cached Firmware Profiles</h3>
+        <table>
+          <thead><tr><th>Profile</th><th>Chip</th><th>Version</th><th>Built (UTC)</th></tr></thead>
+          <tbody id="profilesBody"><tr><td colspan="4" style="color:var(--muted)">Loading…</td></tr></tbody>
+        </table>
+      </section>
+
+      <section class="card">
+        <h3>Advanced Provisioning Settings</h3>
+        <div class="form-grid">
+          <label class="toggle"><span>Auto-Flash Blank Boards</span><input type="checkbox" id="cfg_AUTO_FLASH" /></label>
+          <label class="toggle"><span>Auto-Upgrade Existing</span><input type="checkbox" id="cfg_AUTO_UPGRADE" /></label>
+          <label class="toggle"><span>Auto-Compile On-Pi (Online)</span><input type="checkbox" id="cfg_AUTO_COMPILE" /></label>
+          <label class="toggle"><span>Check GitHub Releases</span><input type="checkbox" id="cfg_ONLINE_CHECK_UPDATES" /></label>
+          <div class="field">
+            <span>Target MCU Detection</span>
+            <select id="cfg_TARGET_CHIP">
+              <option value="auto">auto (Any NodeMCU: ESP8266 / ESP32)</option>
+              <option value="esp8266">esp8266 only</option>
+              <option value="esp32">esp32 only</option>
+            </select>
+          </div>
+          <div class="field">
+            <span>GitHub Repo (owner/repo)</span>
+            <input type="text" id="cfg_GITHUB_REPO" placeholder="0denko/AstroDrive" />
+          </div>
+        </div>
+        <div class="actions" style="margin-top: 10px;">
+          <button class="primary" id="saveCfgBtn" type="button">💾 Save Settings</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h3>Live Provisioning &amp; Compile Logs</h3>
+        <pre id="logsPre">Loading logs…</pre>
+      </section>
+    </div>
   </div>
 
   <script>
     const API_BASE = window.location.pathname.startsWith('/onstep') ? '/onstep' : '';
     let cfgLoaded = false;
+    let currentStep = 1;
 
     const $ = (id) => document.getElementById(id);
+
+    function esc(s) {
+      return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
 
     async function api(path, opts = {}) {
       const res = await fetch(`${API_BASE}${path}`, {
@@ -179,6 +492,45 @@
       return { ok: res.ok, status: res.status, data: await res.json() };
     }
 
+    function setMsg(id, text, cls = '') {
+      const el = $(id);
+      if (!el) return;
+      el.textContent = text;
+      el.className = 'msg' + (cls ? ' ' + cls : '');
+    }
+
+    function switchTab(mode) {
+      const isWiz = mode === 'wizard';
+      $('wizardView').classList.toggle('hidden', !isWiz);
+      $('dashView').classList.toggle('hidden', isWiz);
+      $('tabWizard').classList.toggle('active', isWiz);
+      $('tabDash').classList.toggle('active', !isWiz);
+      localStorage.setItem('astrodrive_view', mode);
+    }
+
+    function goStep(step) {
+      currentStep = step;
+      document.querySelectorAll('.step-panel').forEach((el) => {
+        el.classList.toggle('active', Number(el.dataset.step) === step);
+      });
+      document.querySelectorAll('.step-pill').forEach((el) => {
+        const n = Number(el.dataset.step);
+        el.classList.toggle('active', n === step);
+        el.classList.toggle('done', n < step);
+      });
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function selectBoard(board) {
+      const isEsp32 = board === 'esp32';
+      const svgPath = `${API_BASE}/docs/${isEsp32 ? 'wiring-esp32-tmc2208.svg' : 'wiring-nodemcu-esp8266-tmc2208.svg'}`;
+      $('wiringSvgImg').src = svgPath;
+      $('openSvgLink').href = svgPath;
+      $('btnBoardEsp32').classList.toggle('primary', isEsp32);
+      $('btnBoardEsp8266').classList.toggle('primary', !isEsp32);
+      localStorage.setItem('astrodrive_board', board);
+    }
+
     function renderStatus(s) {
       const dot = $('statusDot');
       dot.className = 'dot';
@@ -186,33 +538,119 @@
       else if (s.symlink_ready) dot.classList.add('ok');
       else dot.classList.add('err');
 
-      $('symlinkVal').textContent = s.symlink_ready ? `${s.symlink_path} (READY)` : `${s.symlink_path} (not ready)`;
-      $('deviceVal').textContent = s.device || 'No NodeMCU detected';
+      const health = s.health || {};
+      const net = s.network || {};
+      const profiles = s.cached_profiles || [];
+      const readyProfiles = profiles.filter((p) => p.binary_present);
 
+      // --- Wizard Step 1: System Checks ---
+      const chkPower = $('chkPower');
+      if (health.undervoltage_now || health.undervoltage_past) {
+        chkPower.className = 'check-row err';
+        $('chkPowerTitle').textContent = '⚠️ Low Raspberry Pi power detected';
+        $('chkPowerSub').textContent = `Undervoltage flag (${health.throttled_hex}). Use a dedicated 5.1 V / 2.5 A+ supply and a short thick USB cable.`;
+      } else {
+        chkPower.className = 'check-row ok';
+        $('chkPowerTitle').textContent = '✅ Raspberry Pi power looks healthy';
+        $('chkPowerSub').textContent = health.throttled_hex ? `Power status: ${health.throttled_hex} (no undervoltage)` : 'Ready';
+      }
+
+      const chkFw = $('chkFirmware');
+      if (readyProfiles.length > 0) {
+        chkFw.className = 'check-row ok';
+        const names = readyProfiles.map((p) => `${p.chip.toUpperCase()} v${p.firmware_version}`).join(' & ');
+        $('chkFirmwareTitle').textContent = `✅ OnStepX firmware ready (${names})`;
+        $('chkFirmwareSub').textContent = 'Cached locally on the Pi — works even offline under dark skies.';
+      } else {
+        chkFw.className = 'check-row warn';
+        $('chkFirmwareTitle').textContent = '☁️ Firmware not cached yet';
+        $('chkFirmwareSub').textContent = 'Click "Download Firmware" while connected to the internet.';
+      }
+
+      const chkIndi = $('chkIndi');
+      if (health.indi_configured) {
+        chkIndi.className = 'check-row ok';
+        $('chkIndiTitle').textContent = '✅ KStars / Ekos (INDI) pre-configured';
+        $('chkIndiSub').textContent = 'LX200 OnStep is already set to /dev/onstep @ 9600 baud.';
+      } else {
+        chkIndi.className = 'check-row warn';
+        $('chkIndiTitle').textContent = '🔧 INDI defaults not applied yet';
+        $('chkIndiSub').textContent = 'Click "Apply Defaults" so KStars/Ekos uses /dev/onstep automatically.';
+      }
+
+      // --- Wizard Step 2: Wi-Fi & Hotspot ---
+      const wb = $('wifiStatusBanner');
+      if (net.hotspot_configured) {
+        wb.className = 'banner ok';
+        $('wifiStatusTitle').textContent = `✅ Field hotspot ready: ${net.hotspot_ssid} (10.42.0.1)`;
+        $('wifiStatusSub').textContent = net.active_wifi
+          ? `Currently connected to Wi-Fi: ${net.active_wifi}`
+          : (net.ip_addresses && net.ip_addresses.length ? `Pi IP: ${net.ip_addresses.join(', ')}` : 'Will start automatically whenever home Wi-Fi is out of range.');
+      } else {
+        wb.className = 'banner';
+        $('wifiStatusTitle').textContent = net.active_wifi ? `Connected to Wi-Fi: ${net.active_wifi}` : 'Field hotspot not configured yet';
+        $('wifiStatusSub').textContent = 'Enter a hotspot name & password below and click Save (or click Next to skip).';
+      }
+
+      // --- Wizard Step 3: Flash Board ---
+      const fb = $('flashBanner');
       const p = s.probe || {};
+      if (s.provisioning_active) {
+        fb.className = 'banner warn';
+        $('flashBannerTitle').textContent = '⚡ Detecting & flashing your board now…';
+        $('flashBannerSub').textContent = 'Please wait 30–60 seconds and do not unplug the USB cable.';
+      } else if (s.indi_active) {
+        fb.className = 'banner ok';
+        $('flashBannerTitle').textContent = '✅ Controller Ready & Connected to KStars / Ekos!';
+        $('flashBannerSub').textContent = `Mount is actively running on ${s.symlink_path} (${s.device}).`;
+      } else if (s.symlink_ready) {
+        fb.className = 'banner ok';
+        const ver = p.state === 'online' ? ` (${p.product} v${p.version} @ ${p.baud} baud)` : '';
+        $('flashBannerTitle').textContent = `✅ Controller Ready on ${s.symlink_path}!${ver}`;
+        $('flashBannerSub').textContent = 'OnStepX is installed and verified. Click "Next: Wire Drivers & Motors" to continue!';
+      } else if (s.device) {
+        fb.className = 'banner warn';
+        $('flashBannerTitle').textContent = `🔌 Board plugged in (${s.device}), waiting to flash`;
+        $('flashBannerSub').textContent = 'Click "Flash / Retry Now" below to install OnStepX onto this board.';
+      } else {
+        fb.className = 'banner';
+        $('flashBannerTitle').textContent = '🔌 Waiting for your ESP32 or NodeMCU…';
+        $('flashBannerSub').textContent = 'Plug the bare board into a Raspberry Pi USB port using a data USB cable.';
+      }
+      $('wizFlashNowBtn').disabled = s.indi_active || s.provisioning_active || !s.device;
+
+      // --- Wizard Step 5: Clock ---
+      $('piClockVal').textContent = health.system_time_utc || '—';
+
+      // --- Dashboard View ---
+      $('symlinkVal').textContent = s.symlink_ready ? `${s.symlink_path} (READY)` : `${s.symlink_path} (not ready)`;
+      $('deviceVal').textContent = s.device || 'No board detected';
       if (p.state === 'online') {
         $('probeVal').textContent = `${p.product} v${p.version} @ ${p.baud}`;
       } else if (p.state === 'provisioning') {
-        $('probeVal').textContent = 'Provisioning / Compiling…';
+        $('probeVal').textContent = 'Flashing / Compiling…';
       } else if (p.state === 'indi_connected') {
-        $('probeVal').textContent = 'Controlled by INDI';
+        $('probeVal').textContent = 'Connected to INDI';
       } else {
         $('probeVal').textContent = p.state || 'unknown';
       }
-
-      $('indiVal').textContent = s.indi_active ? 'Active (indi_lx200_OnStep)' : 'Idle / Free';
+      $('indiVal').textContent = s.indi_active ? 'Active (LX200 OnStep)' : 'Idle / Free';
+      $('powerVal').textContent = (health.undervoltage_now || health.undervoltage_past)
+        ? `⚠️ Low voltage (${health.throttled_hex})`
+        : (health.throttled_hex ? `OK (${health.throttled_hex})` : 'OK');
+      $('clockVal').textContent = health.system_time_utc || '—';
       $('provisionBtn').disabled = s.indi_active || s.provisioning_active || !s.device;
 
       const tbody = $('profilesBody');
-      if (!s.cached_profiles || s.cached_profiles.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" style="color:var(--muted)">No cached binaries yet (will fetch or live-compile online when NodeMCU connects)</td></tr>';
+      if (profiles.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" style="color:var(--muted)">No cached binaries yet — click "Check Online Releases"</td></tr>';
       } else {
-        tbody.innerHTML = s.cached_profiles.map((pf) => `
+        tbody.innerHTML = profiles.map((pf) => `
           <tr>
-            <td>${pf.profile || '—'}</td>
-            <td>${pf.chip || '—'}</td>
-            <td>${pf.firmware_version ? 'v' + pf.firmware_version : '—'} ${pf.binary_present ? '' : '(missing .bin)'}</td>
-            <td>${pf.built_at_utc || '—'}</td>
+            <td>${esc(pf.profile || '—')}</td>
+            <td>${esc(pf.chip || '—')}</td>
+            <td>${pf.firmware_version ? 'v' + esc(pf.firmware_version) : '—'} ${pf.binary_present ? '' : '(missing .bin)'}</td>
+            <td>${esc(pf.built_at_utc || '—')}</td>
           </tr>
         `).join('');
       }
@@ -236,46 +674,139 @@
         ]);
         if (st.ok) renderStatus(st.data);
         if (lg.ok) {
-          const pre = $('logsPre');
-          const atBottom = pre.scrollHeight - pre.scrollTop <= pre.clientHeight + 40;
-          pre.textContent = lg.data.logs;
-          if (atBottom) pre.scrollTop = pre.scrollHeight;
+          for (const preId of ['logsPre', 'wizLogsPre']) {
+            const pre = $(preId);
+            if (!pre) continue;
+            const atBottom = pre.scrollHeight - pre.scrollTop <= pre.clientHeight + 40;
+            pre.textContent = lg.data.logs;
+            if (atBottom) pre.scrollTop = pre.scrollHeight;
+          }
         }
       } catch (err) {
-        $('actionMsg').textContent = `Connection error: ${err.message}`;
+        setMsg('actionMsg', `Connection error: ${err.message}`, 'err');
       }
     }
 
+    // Tabs & Stepper
+    $('tabWizard').addEventListener('click', () => switchTab('wizard'));
+    $('tabDash').addEventListener('click', () => switchTab('dash'));
+    document.querySelectorAll('.step-pill').forEach((btn) => {
+      btn.addEventListener('click', () => goStep(Number(btn.dataset.step)));
+    });
+
+    // Night vision
     $('nightBtn').addEventListener('click', () => {
       document.body.classList.toggle('night-vision');
       localStorage.setItem('onstep_night', document.body.classList.contains('night-vision') ? '1' : '0');
     });
     if (localStorage.getItem('onstep_night') === '1') document.body.classList.add('night-vision');
 
-    $('refreshBtn').addEventListener('click', () => refreshAll(false));
+    // Board selector & safety checklist persistence
+    $('btnBoardEsp32').addEventListener('click', () => selectBoard('esp32'));
+    $('btnBoardEsp8266').addEventListener('click', () => selectBoard('esp8266'));
+    selectBoard(localStorage.getItem('astrodrive_board') || 'esp32');
 
-    $('probeBtn').addEventListener('click', async () => {
-      $('actionMsg').textContent = 'Probing NodeMCU (:GVP# / :GVN#)…';
+    document.querySelectorAll('input[data-chk]').forEach((cb) => {
+      const key = 'astrodrive_safety_' + cb.dataset.chk;
+      cb.checked = localStorage.getItem(key) === '1';
+      cb.addEventListener('change', () => localStorage.setItem(key, cb.checked ? '1' : '0'));
+    });
+
+    // Wizard actions
+    $('wizDownloadFwBtn').addEventListener('click', async () => {
+      setMsg('wizMsg1', 'Downloading latest verified ESP32 & ESP8266 firmware…');
+      const res = await api('/api/action/update-cache', { method: 'POST', body: '{}' });
+      setMsg('wizMsg1', res.ok ? res.data.message : (res.data.error || 'Download failed'), res.ok ? 'ok' : 'err');
+      setTimeout(() => refreshAll(false), 2500);
+    });
+
+    async function applyIndi(msgId) {
+      setMsg(msgId, 'Applying INDI LX200 OnStep defaults…');
+      const res = await api('/api/action/configure-indi', { method: 'POST', body: '{}' });
+      setMsg(msgId, res.ok ? res.data.message : (res.data.error || 'Failed'), res.ok ? 'ok' : 'err');
+      refreshAll(false);
+    }
+    $('wizApplyIndiBtn').addEventListener('click', () => applyIndi('wizMsg1'));
+    $('wizReapplyIndiBtn').addEventListener('click', () => applyIndi('wizMsg5'));
+
+    $('wizSaveWifiBtn').addEventListener('click', async () => {
+      setMsg('wizMsg2', 'Saving Wi-Fi & field hotspot settings…');
+      const payload = {
+        home_ssid: $('wizHomeSsid').value.trim(),
+        home_pass: $('wizHomePass').value,
+        ap_ssid: $('wizApSsid').value.trim(),
+        ap_pass: $('wizApPass').value,
+      };
+      const res = await api('/api/action/setup-hotspot', { method: 'POST', body: JSON.stringify(payload) });
+      setMsg('wizMsg2', res.ok ? res.data.message : (res.data.error || 'Save failed'), res.ok ? 'ok' : 'err');
+      refreshAll(false);
+    });
+
+    $('wizFlashNowBtn').addEventListener('click', async () => {
+      setMsg('wizMsg3', 'Starting automatic flasher (takes ~30–60 seconds)…');
+      const res = await api('/api/action/provision', { method: 'POST', body: '{}' });
+      setMsg('wizMsg3', res.ok ? 'Flashing started! Watch the status box above.' : (res.data.error || 'Failed to start'), res.ok ? 'ok' : 'err');
+      setTimeout(() => refreshAll(false), 1000);
+    });
+
+    $('wizTestBtn').addEventListener('click', async () => {
+      setMsg('wizMsg3', 'Testing connection to OnStepX…');
       const res = await api('/api/action/probe', { method: 'POST', body: '{}' });
       if (res.ok) {
         renderStatus(res.data);
-        $('actionMsg').textContent = `Probe complete: ${res.data.probe.state}`;
+        const p = res.data.probe || {};
+        if (p.state === 'online') {
+          setMsg('wizMsg3', `✅ Connected! Detected ${p.product} v${p.version} at ${p.baud} baud.`, 'ok');
+        } else {
+          setMsg('wizMsg3', `Status: ${p.state}`, p.state === 'indi_connected' ? 'ok' : 'err');
+        }
       } else {
-        $('actionMsg').textContent = res.data.error || 'Probe failed';
+        setMsg('wizMsg3', res.data.error || 'Test failed', 'err');
+      }
+    });
+
+    async function syncPiClock(msgId) {
+      setMsg(msgId, 'Syncing Raspberry Pi clock from your browser…');
+      const res = await api('/api/action/sync-time', {
+        method: 'POST',
+        body: JSON.stringify({ epoch_ms: Date.now() }),
+      });
+      setMsg(msgId, res.ok ? `✅ ${res.data.message}` : (res.data.error || 'Sync failed'), res.ok ? 'ok' : 'err');
+      refreshAll(false);
+    }
+    $('wizSyncTimeBtn').addEventListener('click', () => syncPiClock('wizMsg5'));
+    $('dashSyncTimeBtn').addEventListener('click', () => syncPiClock('actionMsg'));
+
+    $('wizFinishBtn').addEventListener('click', () => {
+      localStorage.setItem('astrodrive_wizard_done', '1');
+      switchTab('dash');
+    });
+
+    // Dashboard actions
+    $('refreshBtn').addEventListener('click', () => refreshAll(false));
+
+    $('probeBtn').addEventListener('click', async () => {
+      setMsg('actionMsg', 'Probing controller (:GVP# / :GVN#)…');
+      const res = await api('/api/action/probe', { method: 'POST', body: '{}' });
+      if (res.ok) {
+        renderStatus(res.data);
+        setMsg('actionMsg', `Probe complete: ${res.data.probe.state}`, 'ok');
+      } else {
+        setMsg('actionMsg', res.data.error || 'Probe failed', 'err');
       }
     });
 
     $('updateBtn').addEventListener('click', async () => {
-      $('actionMsg').textContent = 'Checking GitHub Releases for latest firmware…';
+      setMsg('actionMsg', 'Checking GitHub Releases for latest firmware…');
       const res = await api('/api/action/update-cache', { method: 'POST', body: '{}' });
-      $('actionMsg').textContent = res.ok ? res.data.message : (res.data.error || 'Update failed');
-      setTimeout(() => refreshAll(false), 1500);
+      setMsg('actionMsg', res.ok ? res.data.message : (res.data.error || 'Update failed'), res.ok ? 'ok' : 'err');
+      setTimeout(() => refreshAll(false), 2000);
     });
 
     $('provisionBtn').addEventListener('click', async () => {
-      $('actionMsg').textContent = 'Starting auto-provisioner (detect → fetch/compile → flash)…';
+      setMsg('actionMsg', 'Starting auto-provisioner (detect → fetch/compile → flash)…');
       const res = await api('/api/action/provision', { method: 'POST', body: '{}' });
-      $('actionMsg').textContent = res.ok ? `Started ${res.data.unit}` : (res.data.error || 'Failed to start');
+      setMsg('actionMsg', res.ok ? `Started ${res.data.unit}` : (res.data.error || 'Failed to start'), res.ok ? 'ok' : 'err');
       setTimeout(() => refreshAll(false), 1000);
     });
 
@@ -289,8 +820,13 @@
         GITHUB_REPO: $('cfg_GITHUB_REPO').value.trim(),
       };
       const res = await api('/api/config', { method: 'POST', body: JSON.stringify(payload) });
-      $('actionMsg').textContent = res.ok ? 'Settings saved to /etc/onstep-autoprovision/config.env' : (res.data.error || 'Save failed');
+      setMsg('actionMsg', res.ok ? 'Settings saved.' : (res.data.error || 'Save failed'), res.ok ? 'ok' : 'err');
     });
+
+    // Open Setup Wizard by default on first visit; remember tab preference after finishing
+    const savedView = localStorage.getItem('astrodrive_view');
+    const wizDone = localStorage.getItem('astrodrive_wizard_done') === '1';
+    switchTab(savedView || (wizDone ? 'dash' : 'wizard'));
 
     refreshAll(false);
     setInterval(() => refreshAll(false), 3000);

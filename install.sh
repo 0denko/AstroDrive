@@ -52,7 +52,7 @@ ARDUINO_CACHE="/var/cache/onstep-arduino"
 echo "==> Installing scripts, Web UI overlay & firmware profiles to ${INSTALL_DIR}..."
 mkdir -p \
   "${INSTALL_DIR}/scripts" \
-  "${INSTALL_DIR}/webui" \
+  "${INSTALL_DIR}/webui/docs" \
   "${INSTALL_DIR}/firmware" \
   "${INSTALL_DIR}/firmware-src" \
   "${CONFIG_DIR}" \
@@ -64,10 +64,14 @@ install -m 0755 "${REPO_DIR}/scripts/probe_onstep.py" "${INSTALL_DIR}/scripts/pr
 install -m 0755 "${REPO_DIR}/scripts/update_firmware.sh" "${INSTALL_DIR}/scripts/update_firmware.sh"
 install -m 0755 "${REPO_DIR}/scripts/setup_hotspot.sh" "${INSTALL_DIR}/scripts/setup_hotspot.sh"
 install -m 0755 "${REPO_DIR}/scripts/configure_nginx_overlay.sh" "${INSTALL_DIR}/scripts/configure_nginx_overlay.sh"
+install -m 0755 "${REPO_DIR}/scripts/configure_indi_defaults.sh" "${INSTALL_DIR}/scripts/configure_indi_defaults.sh"
 install -m 0755 "${REPO_DIR}/webui/onstep_webui.py" "${INSTALL_DIR}/webui/onstep_webui.py"
 install -m 0644 "${REPO_DIR}/webui/index.html" "${INSTALL_DIR}/webui/index.html"
 install -m 0644 "${REPO_DIR}/webui/overlay.js" "${INSTALL_DIR}/webui/overlay.js"
 install -m 0644 "${REPO_DIR}/requirements.txt" "${INSTALL_DIR}/requirements.txt"
+if [ -d "${REPO_DIR}/docs" ]; then
+  cp -f "${REPO_DIR}/docs/"*.svg "${INSTALL_DIR}/webui/docs/" 2>/dev/null || true
+fi
 
 # Copy firmware overlay profiles & build.sh so the Pi can compile live when online
 install -m 0755 "${REPO_DIR}/firmware/build.sh" "${INSTALL_DIR}/firmware-src/build.sh"
@@ -155,6 +159,9 @@ if [ -f /etc/default/gpsd ] && grep -Eq '^\s*USBAUTO\s*=\s*"?true"?' /etc/defaul
   sed -i 's/^\s*USBAUTO=.*/USBAUTO="false"/' /etc/default/gpsd
 fi
 
+# Pre-configure INDI LX200 OnStep defaults (/dev/onstep @ 9600 baud, Auto Search off)
+"${INSTALL_DIR}/scripts/configure_indi_defaults.sh" || true
+
 if [ "${CHROOT_MODE}" = "false" ]; then
   systemctl daemon-reload
   systemctl start onstep-firmware-update.timer || true
@@ -178,9 +185,5 @@ fi
 
 echo ""
 echo "==> Installation complete!"
-echo "Next steps:"
-echo "  1. Open http://astroberry.local (OnStepX pill/drawer overlay) or http://$(hostname).local:8090"
-echo "  2. Review ${CONFIG_FILE} (TARGET_CHIP=auto, GITHUB_REPO, AUTO_FLASH=true)."
-echo "  3. Optional dark-sky Wi-Fi fallback: sudo ${INSTALL_DIR}/scripts/setup_hotspot.sh --ap-ssid AstroPi-OnStep --ap-pass <8+chars>"
-echo "  4. Plug in any NodeMCU (ESP8266 or ESP32) and watch live progress in the Web UI or: journalctl -fu 'onstep-autoprovision@*'"
-echo "  5. Configure KStars/Ekos driver 'LX200 OnStep' (indi_lx200_OnStep) on /dev/onstep @ 9600 baud."
+echo "Open http://astroberry.local/onstep/ (or http://$(hostname).local:8090/) in your browser to launch the Setup Wizard."
+

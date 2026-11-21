@@ -1,176 +1,89 @@
 # AstroDrive
 
-Automated **OnStepX** firmware provisioning, **Astroberry OS v3.2+ Web UI overlay**, and **INDI (`indi_lx200_OnStep`)** integration for a Raspberry Pi telescope mount controller driving **ESP32-WROOM** (primary) or **NodeMCU ESP8266** (backup) + **2× silent TMC2208** stepper drivers.
-
-> Detailed motor specs, LM2596S 5.1 V cable-drop measurements, undervoltage diagnostics, power sequencing, and wire-by-wire build checklists live in **[`HARDWARE.md`](HARDWARE.md)**.
+Turn a **Raspberry Pi** + **ESP32-WROOM** (or **NodeMCU ESP8266**) + **2× silent TMC2208** stepper drivers into a plug-and-play **OnStepX** telescope mount controller with a built-in browser **Setup Wizard**.
 
 ---
 
-## Step-by-Step Setup Guide (Fresh SD Card → Working Mount)
+## Quick Start (4 Simple Steps)
 
-Follow these steps in order. You can complete **Steps 1–5 on your desk** with just the Raspberry Pi and a bare ESP32/NodeMCU over USB before wiring the 12 V supply, TMC2208 drivers, and stepper motors in **Step 6**.
+No manual firmware compiling, no config file editing, and no memorizing Linux commands. After pasting **one** install line, everything else is **Next → Next → Done** in your browser.
 
 ### What You Need
-
-- **Raspberry Pi 4 or 5** (64-bit) with a **≥ 16 GB microSD card** and a dedicated **5.1 V / 2.5 A+** power supply (Pi 3B also works with vanilla 64-bit Raspberry Pi OS).
-- **ESP32-WROOM / NodeMCU-32S** (recommended primary) **or** **Amica NodeMCU v2 ESP8266** (backup), plus a **short, thick data-capable USB cable**.
-- **2× FYSETC TMC2208 V1.0** stepper drivers + **2× 100 µF (≥ 25 V)** electrolytic capacitors + **2× 10 kΩ** resistors (for `EN` pull-ups).
-- **Stepper motors & power:** `36H20HM-0504A` (RA), `36H18HM` (DEC), **12 V ≥ 4 A DC supply** with a **4 A inline fuse**, and a multimeter.
+- **Raspberry Pi 4 or 5** + **≥ 16 GB microSD card** + good **5.1 V / 2.5 A+** Pi power supply
+- **ESP32-WROOM** *(recommended)* or **NodeMCU ESP8266** + a short **data USB cable**
+- **2× TMC2208** stepper drivers, **2× stepper motors** (`36H20HM` / `36H18HM`), **12 V ≥ 4 A** power supply + **4 A fuse**, **2× 100 µF** capacitors, **2× 10 kΩ** resistors, and a multimeter
 
 ---
 
 ### Step 1 — Flash the microSD Card
 
-1. Download the latest 64-bit **Astroberry OS v3.2+** image (`astroberryos_3.2_debian-trixie-arm64.img.xz`) from **[astroberry.io/download](https://astroberry.io/download/)**.
-2. Open **Raspberry Pi Imager**:
-   - **Raspberry Pi Device:** select your Pi model.
-   - **Operating System:** click **Use custom** and select the downloaded `.img.xz` file.
-   - **Storage:** select your microSD card.
-3. Click **Next**. When Raspberry Pi Imager asks *"Would you like to apply OS customisation settings?"*, click **No** — Astroberry OS configures itself on first boot and customisation settings can interfere with it.
-4. Wait for the write and verification to finish, then eject the card.
-
-> **Alternative (Raspberry Pi 3B or vanilla Raspberry Pi OS 64-bit):** Flash **Raspberry Pi OS (64-bit)** with Raspberry Pi Imager, **do** apply OS Customisation (set username, password, Wi-Fi, and enable SSH), then jump to Step 3. Without Astroberry OS, AstroDrive's Web UI runs standalone at `http://<hostname>.local:8090`, and you'll install INDI/KStars separately.
->
-> **Alternative (Pre-baked CI `.img.xz`):** You can also trigger **Actions → Build Raspberry Pi Overlay Image (.img.xz)** in this repo to produce a ready-to-flash image with AstroDrive already installed.
+1. Download **Astroberry OS** (`astroberryos_3.2_debian-trixie-arm64.img.xz`) from **[astroberry.io/download](https://astroberry.io/download/)**.
+2. Open **[Raspberry Pi Imager](https://www.raspberrypi.com/software/)** on your computer.
+3. Click **Choose Device** → pick your Raspberry Pi model.
+4. Click **Choose OS** → scroll down to **Use custom** → pick the file you just downloaded.
+5. Click **Choose Storage** → pick your microSD card → click **Next**.
+6. When it asks *"Would you like to apply OS customisation settings?"*, click **No** (Astroberry sets itself up automatically).
+7. Wait for it to finish, then eject the card.
 
 ---
 
-### Step 2 — First Boot & Connect the Pi to Home Wi-Fi
+### Step 2 — Turn On the Pi & Connect to Home Wi-Fi
 
-1. Insert the microSD card into the Raspberry Pi and power it on. Wait **1–2 minutes** for first boot.
-2. Connect your laptop or phone to the Pi in one of two ways:
-   - Plug the Pi into your router with an **Ethernet cable**, **or**
-   - Join the temporary Wi-Fi hotspot named **`astroberry`** (password: **`astroberry`**).
-3. Open **`http://astroberry.local`** in your browser.
-4. Accept the welcome screen and log in with username **`astroberry`** and password **`astroberry`**.
-5. Inside Astroberry's initial setup:
-   - Set your **WLAN country** (required for Wi-Fi).
-   - Set your **geographic location**.
-   - Connect the Pi to your **home Wi-Fi** (or keep Ethernet plugged in) so the Pi gets internet access and syncs its system clock.
-6. *(Recommended)* Change the default password by opening a terminal and running `passwd`.
+1. Insert the microSD card into the Raspberry Pi and plug in its power. Wait **2 minutes**.
+2. On your laptop or phone, join the Wi-Fi network **`astroberry`** (password: **`astroberry`**) — or plug an Ethernet cable into your router.
+3. Open your web browser and go to **`http://astroberry.local`**.
+4. Log in with username **`astroberry`** and password **`astroberry`**.
+5. Follow Astroberry's short welcome screen to pick your **country**, **location**, and connect the Pi to your **home Wi-Fi** (so it has internet access).
 
 ---
 
-### Step 3 — Install AstroDrive on the Pi
+### Step 3 — Install AstroDrive (One Command)
 
-SSH into the Pi (`ssh astroberry@astroberry.local`) or open the terminal inside Astroberry's web desktop, then run:
+1. Inside `http://astroberry.local`, open the **Terminal** (or SSH into `astroberry@astroberry.local`).
+2. Copy and paste this single line, then press **Enter**:
 
 ```bash
-sudo apt update && sudo apt install -y python3 python3-venv python3-pip git curl udev
-git clone https://github.com/0denko/AstroDrive.git
-cd AstroDrive
-sudo ./install.sh --enable-auto-flash --github-repo "0denko/AstroDrive"
+curl -fsSL https://raw.githubusercontent.com/0denko/AstroDrive/main/setup.sh | sudo bash
 ```
 
-Then pre-download the latest verified OnStepX firmware binaries (ESP32 + ESP8266) from GitHub Releases so they are cached locally even when you go offline in the field:
-
-```bash
-sudo /opt/onstep-autoprovision/scripts/update_firmware.sh --all
-```
-
-> **Note:** You do **not** need `--with-arduino-cli` for normal use — both `nodemcu-esp32-tmc2208s` and `nodemcu-esp8266-tmc2208s` binaries are prebuilt by GitHub Actions and downloaded automatically. Add `--with-arduino-cli` only if you want the Pi itself to compile custom `Config.h` edits on-device (takes ~10 minutes and ~1.5 GB of SD space).
-
-Verify the Web UI overlay is live by reloading **`http://astroberry.local`** — you should see an **OnStepX** status pill in the corner (or open **`http://astroberry.local:8090`** directly).
+3. Wait 1–2 minutes until you see **`AstroDrive is installed and ready!`**.
+   - This automatically installs AstroDrive, downloads the latest ready-to-flash OnStepX firmware for both ESP32 and NodeMCU, pre-configures KStars/Ekos (`LX200 OnStep` on `/dev/onstep` at `9600` baud), and adds the guided **Setup Wizard** to Astroberry.
+   - You can close the Terminal now — you don't need it anymore!
 
 ---
 
-### Step 4 — Set Up Home Wi-Fi + Dark-Sky Field Hotspot (Recommended)
+### Step 4 — Click Through the Setup Wizard in Your Browser
 
-Configure NetworkManager so the Pi uses your home Wi-Fi at home and automatically falls back to its own hotspot (`10.42.0.1`) at dark-sky sites:
+1. Reload **`http://astroberry.local`** and click the **`AstroDrive Setup`** button in the bottom-right corner *(or go directly to `http://astroberry.local/onstep/`)*.
+2. Click **Next →** through the 5 guided screens:
 
-```bash
-sudo /opt/onstep-autoprovision/scripts/setup_hotspot.sh \
-  --home-ssid "YourHomeWiFi" --home-pass "YourHomePassword" \
-  --ap-ssid "AstroPi-OnStep" --ap-pass "clearSkies2026"
-```
+| Screen | What You Do |
+| :--- | :--- |
+| **1. System Check** | Confirm the green checkmarks (Pi power, cached firmware, KStars/Ekos defaults). Click **Next**. |
+| **2. Wi-Fi & Field Hotspot** *(optional)* | Enter a hotspot name & password so your phone can connect out under dark skies, click **Save**, then **Next** (or skip). |
+| **3. Flash Board** | Plug your **bare** ESP32 or NodeMCU into any Pi USB port (no 12 V or motors yet). Wait ~30–60 seconds for the green **Controller Ready!** message, then click **Next**. |
+| **4. Wiring & Safety** | Unplug USB, pick your board to view the wiring picture right on screen, tick off the 6 safety checks (including setting `Vref ≈ 0.35 V` with motors unplugged), and turn on **12 V power before plugging USB back in**. Click **Next**. |
+| **5. Connect & Finish** | Open **KStars → Ekos**, pick **Mount: `LX200 OnStep`**, click **Start** → **Connect**, and test moving the motors on your desk before mounting them on the telescope! |
 
-- **At home:** Connects to `YourHomeWiFi` automatically (priority `100`).
-- **In the field:** Broadcasts `AstroPi-OnStep` (priority `10`, IP `10.42.0.1`). Join it on your phone and open `http://astroberry.local` or `http://10.42.0.1`.
-
----
-
-### Step 5 — Plug In the ESP32 / NodeMCU (Automatic Firmware Flash)
-
-Do this **on your desk with the bare microcontroller first** (no 12 V power, drivers, or motors attached yet):
-
-1. Open a live log view on the Pi so you can watch the auto-flasher work:
-   ```bash
-   journalctl -fu 'onstep-autoprovision@*'
-   ```
-   *(Or open `http://astroberry.local` and click the **OnStepX** status pill.)*
-2. Plug your **ESP32-WROOM** (or **NodeMCU ESP8266**) into a USB port on the Pi using a **short, thick data USB cable**.
-3. Wait **30–60 seconds**. AstroDrive automatically:
-   - Detects the CP2102 (`10c4:ea60`) or CH340 (`1a86:7523`) USB-serial chip,
-   - Identifies whether it is an `esp32` or `esp8266` via `esptool`,
-   - Flashes the matching verified OnStepX `TMC2208S` binary (`onstepx-nodemcu-esp32-tmc2208s.bin` or `onstepx-nodemcu-esp8266-tmc2208s.bin`),
-   - Resets the board, verifies the `:GVP#` LX200 handshake, and publishes **`/dev/onstep`**.
-4. Confirm `/dev/onstep` exists and replies as OnStepX:
-   ```bash
-   ls -l /dev/onstep
-   /opt/onstep-autoprovision/.venv/bin/python \
-     /opt/onstep-autoprovision/scripts/probe_onstep.py --device /dev/onstep
-   ```
-   You should see **`On-Step`** and the version (e.g. `10.29f`) at **`9600`** baud.
-
-> **ESP32 note:** Some ESP32-WROOM clones do not auto-enter bootloader mode on the very first flash. If `journalctl` logs an `esptool` sync timeout, hold the **BOOT** button on the ESP32 while plugging it in (or for 2 seconds after plug-in), then release it once flashing starts.
+> **Tip for dark-sky trips (no internet):** When you're away from home Wi-Fi, join the Pi's hotspot (`AstroPi-OnStep`), open `http://10.42.0.1/onstep/`, and tap **Sync Pi Clock from This Phone/Laptop** so your mount has the exact time.
 
 ---
 
-### Step 6 — Wire the Hardware & Pre-Power Safety Checks
+## Quick Troubleshooting
 
-Unplug the USB cable from the ESP32/NodeMCU before wiring. Follow the wiring diagram for your board below and the full wire-by-wire table in [`HARDWARE.md`](HARDWARE.md).
-
-**Run through every check before powering motors:**
-
-1. **Buck converter (if used):** Set any LM2596S output to **5.1 V** with a multimeter *before* connecting anything to it. Prefer powering the Pi from its own dedicated 5.1 V / 2.5 A+ supply.
-2. **Common ground:** Confirm `12 V PSU −`, both TMC2208 power/logic `GND` pins, MCU `GND`, and Pi `GND` share a common ground bus.
-3. **Decoupling capacitors:** Fit a **100 µF (≥ 25 V)** electrolytic capacitor across `VM` and power-end `GND` right next to each TMC2208.
-4. **Driver tie-offs (both TMC2208s):**
-   - `MS1` + `MS2` → **`VIO` (`3V3`)** for `1/16` StealthChop2 (`256×` MicroPlyer). Leaving them floating gives `1/8`, causing 2× travel error.
-   - `PDN` + `CLK` → **`GND`** (internal clock + standstill current reduction).
-   - `EN` → **10 kΩ pull-up to `VIO`** in addition to the MCU GPIO (**mandatory** on NodeMCU `D0/GPIO16` so coils stay off at boot).
-   - **ESP32 warning:** Do **not** add an external pull-up on `GPIO12` (`DEC DIR` strapping pin).
-5. **Set `Vref` (motors unplugged!):** Apply 12 V to `VM`, leave both motors disconnected, measure the `Vref` trimmer pad against `GND`, and adjust both drivers to **`~0.35 V`** (`~0.25 A RMS`). **Never exceed `0.71 V`** (`0.50 A` rating of the `36H20HM`).
-6. **Verify motor coil pairs:** With power off, use a multimeter to find each coil pair (`~12 Ω` on `36H20HM`, open circuit between coils). Wire one pair to `M1A`+`M1B` and the other to `M2A`+`M2B`. **Never pair the adjacent `M2A` and `M1A` pins** — they belong to different coils.
-7. **Power-up order:** Turn on **12 V `VM` first**, then plug the MCU **USB cable (`VIO`)** into the Pi. Never disconnect a motor or cut 12 V while an axis is moving.
+| Problem | Easy Fix |
+| :--- | :--- |
+| **Board isn't detected or won't flash** | Use a short **data-capable** USB cable (some charging cables have no data wires). On some ESP32 boards, hold the tiny **BOOT** button for 2 seconds right after plugging it in. |
+| **Red "Low Raspberry Pi power" warning** | Power the Pi from its own dedicated **5.1 V / 2.5 A+** adapter (not a phone charger or thin USB cable). |
+| **Motor buzzes and gets warm instead of turning** | Power off and check the 4 motor wires — pair Coil 1 to `M1A`+`M1B` and Coil 2 to `M2A`+`M2B` (never pair the two middle `M2A`+`M1A` pins together). |
+| **Telescope moves twice as far as commanded** | Make sure both `MS1` and `MS2` on each TMC2208 are wired to `VIO` (3.3 V) for 1/16 microsteps. |
+| **Can't reach `http://astroberry.local`** | Try `http://astroberry.local:8090` (or `http://10.42.0.1:8090` when connected to the field hotspot). |
 
 ---
 
-### Step 7 — Connect KStars / Ekos (INDI) & Bench-Test the Motors
+## Wiring Diagrams
 
-1. Open **`http://astroberry.local`** and launch **KStars → Ekos**.
-2. Create or edit your Ekos equipment profile:
-   - **Mount:** `LX200 OnStep` (`indi_lx200_OnStep`)
-   - *(Optional, for phone planetarium control)* **Aux:** `SkySafari` (`indi_skysafari`)
-3. Start Ekos, open the **INDI Control Panel → LX200 OnStep → Connection** tab, and set:
-   - **Connection Mode:** `Serial`
-   - **Port:** `/dev/onstep`
-   - **Baud Rate:** `9600`
-   - **Auto Search:** `Disabled`
-4. Open the **Options** tab → click **Save**, then return to **Connection** and click **Connect**.
-5. **Test off the telescope first:**
-   - Unpark / enable tracking and nudge RA (East/West) and DEC (North/South) in Ekos.
-   - Confirm both motors turn smoothly and silently without buzzing or getting hot.
-   - If an axis runs backwards: power down and rotate its 4-pin motor plug 180°, or flip `AXIS1_REVERSE` / `AXIS2_REVERSE` in `Config.h`.
-   - Once mounted, verify a 90° slew actually moves 90°. If DEC (`36H18HM`) moves half the commanded angle, the motor is `1.8°` instead of `0.9°` — change `AXIS2_STEPS_PER_DEGREE` from `2560.0` to `1280.0`.
-6. *(Optional)* **SkySafari on your phone:** Connect to your home Wi-Fi (or `AstroPi-OnStep` in the field), configure SkySafari with Scope Type **Meade LX200 Classic** / **INDI**, IP **`astroberry.local`** (or **`10.42.0.1`**), Port **`9624`**.
-
----
-
-### Step 8 — Troubleshooting Quick Reference
-
-| Symptom | Likely Cause | Fix |
-| :--- | :--- | :--- |
-| `/dev/onstep` never appears after plugging in MCU | USB cable is charge-only, non-CP2102/CH340 bridge, or flash failed | Run `lsusb` and `journalctl -fu 'onstep-autoprovision@*'`. Try a short data USB cable; on ESP32 hold **BOOT** briefly if `esptool` times out. |
-| Serial port disconnects / reconnects every few seconds | Raspberry Pi 5 V undervoltage or thin USB cable | Check `vcgencmd get_throttled` (must be `0x0`) and `dmesg \| grep -i undervoltage`. Use a dedicated 5.1 V / 2.5 A+ Pi PSU and a shorter/thicker cable (see [`HARDWARE.md`](HARDWARE.md#power)). |
-| Board wasn't flashed automatically | `AUTO_FLASH` is `false` in `/etc/onstep-autoprovision/config.env` | Toggle **Auto-Flash** on in the Web UI (`http://astroberry.local` → OnStepX pill) or set `AUTO_FLASH="true"` in `/etc/onstep-autoprovision/config.env`, then replug USB. |
-| Motor buzzes, heats up, and does not turn | Wrong coil pairing (`M2A` + `M1A` paired together) or `Vref` too low | Power off, buzz coil pairs with a multimeter, wire Coil 1 to `M1A`/`M1B` and Coil 2 to `M2A`/`M2B`, and confirm `Vref ≈ 0.35 V`. |
-| Axis moves **double** the commanded angle | `MS1`/`MS2` left floating (`1/8` microsteps instead of `1/16`) | Tie both `MS1` and `MS2` to `VIO` (`3V3`). |
-| Web UI pill doesn't show on `http://astroberry.local` | Nginx not installed or using vanilla RPi OS | Open `http://<pi-hostname>.local:8090/` directly, or run `sudo /opt/onstep-autoprovision/scripts/configure_nginx_overlay.sh`. |
-
----
-
-## Hardware & Wiring Diagrams
+Full step-by-step wiring tables, motor measurements, and power notes are in **[`HARDWARE.md`](HARDWARE.md)**.
 
 ### ESP32-WROOM + 2× TMC2208 (Recommended Primary)
 
@@ -179,6 +92,13 @@ Unplug the USB cable from the ESP32/NodeMCU before wiring. Follow the wiring dia
 ### NodeMCU ESP8266 + 2× TMC2208 (Drop-In Backup)
 
 ![NodeMCU ESP8266 + 2x TMC2208 Wiring Diagram](docs/wiring-nodemcu-esp8266-tmc2208.svg)
+
+---
+
+## Technical Reference (For Advanced Users)
+
+<details>
+<summary><strong>Pinout Table &amp; Motor Settings</strong></summary>
 
 All pin assignments in both firmware profiles match [`HARDWARE.md`](HARDWARE.md) directly:
 
@@ -193,154 +113,79 @@ All pin assignments in both firmware profiles match [`HARDWARE.md`](HARDWARE.md)
 | **Logic VCC / GND** | `3V3` / `GND` | `3V3` / `GND` | `VIO` / logic `GND` | **Never feed 5 V into ESP32/ESP8266 pins** |
 | **Driver Tie-Offs** | — | — | `MS1`, `MS2` → `VIO`; `PDN`, `CLK` → `GND` | Selects `1/16` StealthChop2 (256× interpolated) + internal clock + standstill power-down |
 
-- **Motors (`HARDWARE.md`):** `36H20HM-0504A` (`0.9°` = `400` steps/rev, `0.5 A`, `12 Ω`) on RA and `36H18HM` on DEC; at `1/16` microsteps (`MS1` + `MS2` → `VIO`) and `144:1` worm → **`2560.0` steps/degree**.
-- **TMC2208 `Vref`:** Start at **`~0.35 V`** (`~0.25 A RMS`, cool & plenty of torque at 144:1); never exceed **`0.71 V`** (`0.50 A` motor rating). Tune with motors disconnected and `100 µF` capacitors across `VM` and `GND`.
+- **Motors:** `36H20HM-0504A` (`0.9°` = `400` steps/rev, `0.5 A`, `12 Ω`) on RA and `36H18HM` on DEC; at `1/16` microsteps and `144:1` worm → **`2560.0` steps/degree** (if `36H18HM` is `1.8°`, adjust `AXIS2_STEPS_PER_DEGREE` to `1280.0`).
+- **TMC2208 `Vref`:** Set to **`~0.35 V`** (`~0.25 A RMS`) with motors unplugged; never exceed **`0.71 V`** (`0.50 A`).
 
----
+</details>
 
-## Architecture Overview
+<details>
+<summary><strong>How Auto-Provisioning Works (Architecture)</strong></summary>
 
-To eliminate `udev` timeouts and prevent serial-port races with `indi_lx200_OnStep`, `ModemManager`, and `gpsd`, device readiness is split into two stages:
-
-1. **`udev`** (`udev/99-onstep-nodemcu.rules`) detects CP2102 (`10c4:ea60`) or CH340 (`1a86:7523`) NodeMCU / ESP32 boards, creates `/dev/onstep-raw`, blocks `ModemManager` (`ID_MM_DEVICE_IGNORE=1`), and triggers `onstep-autoprovision@ttyUSBx.service`.
-2. **`systemd` + Python** (`scripts/onstep_provision.py`) acquires an exclusive `flock`, verifies no active INDI session holds the port, probes LX200 `:GVP#` / `:GVN#` without triggering DTR/RTS auto-reset, auto-detects any blank board's MCU silicon (`esp32` vs `esp8266`), fetches or live-compiles the matching OnStepX `.bin`, flashes & verifies it, and **only then atomically publishes `/dev/onstep`** for `indi_lx200_OnStep`.
+1. **`udev`** (`udev/99-onstep-nodemcu.rules`) detects CP2102 (`10c4:ea60`) or CH340 (`1a86:7523`) ESP32/NodeMCU boards, creates `/dev/onstep-raw`, blocks `ModemManager` (`ID_MM_DEVICE_IGNORE=1`), and triggers `onstep-autoprovision@ttyUSBx.service`.
+2. **`systemd` + Python** (`scripts/onstep_provision.py`) acquires an exclusive `flock`, verifies no active INDI session holds the port, probes LX200 `:GVP#` / `:GVN#` without DTR/RTS reset, detects blank boards via `esptool --chip auto chip_id`, fetches or compiles the matching OnStepX `.bin`, flashes & verifies it, and **atomically publishes `/dev/onstep`** for `indi_lx200_OnStep`.
+3. **Upgrade-safe Astroberry UI overlay:** Nginx proxies `/onstep/` to `onstep-webui.service` (`127.0.0.1:8090`) and injects `/onstep/overlay.js` via `sub_filter` with an APT post-invoke hook (`/etc/apt/apt.conf.d/99-onstep-nginx-overlay`).
 
 ```mermaid
 flowchart LR
     subgraph MCU["ESP32-WROOM or NodeMCU ESP8266"]
-        USB["CP2102 (10c4:ea60)\nor CH340 (1a86:7523)"]
+        USB["CP2102 / CH340 USB"]
         FW["OnStepX (PINMAP OFF)\nUART0 @ 9600 baud"]
-        DRV["2× TMC2208 StepSticks\n(TMC2208S StealthChop2\n1/16 -> 1/256 MicroPlyer)"]
+        DRV["2× TMC2208S (1/16 StealthChop2)"]
         USB <--> FW --> DRV
     end
-
-    subgraph RPI["Raspberry Pi (Astroberry OS v3.2+ / RPi OS 64-bit)"]
-        UDEV["udev\n99-onstep-nodemcu.rules\n(/dev/onstep-raw)"]
-        SVC["systemd oneshot\nonstep-autoprovision@.service"]
-        PROV["onstep_provision.py\n• flock + FD check\n• Auto chip detect (esp32/esp8266)\n• 3-tier fetch / live compile\n• esptool.py + SHA-256"]
-        LINK["/dev/onstep\n(Published ONLY when verified)"]
-        INDI["indiserver\nindi_lx200_OnStep @ 9600 baud\n(KStars / Ekos / SkySafari)"]
-        UI["Astroberry Web UI Overlay\nhttp://astroberry.local + /onstep/"]
-
-        UDEV -->|SYSTEMD_WANTS| SVC --> PROV
-        PROV -->|Atomic symlink| LINK --> INDI
-        PROV -. "Live status & logs" .-> UI
+    subgraph RPI["Raspberry Pi (Astroberry OS v3.2+)"]
+        UDEV["udev (/dev/onstep-raw)"]
+        PROV["onstep_provision.py\n(auto chip detect + flash)"]
+        LINK["/dev/onstep"]
+        INDI["indi_lx200_OnStep @ 9600"]
+        UI["AstroDrive Setup Wizard\nhttp://astroberry.local/onstep/"]
+        UDEV --> PROV --> LINK --> INDI
+        PROV -.-> UI
     end
-
-    USB <== "USB Cable" ==> UDEV
+    USB <==> UDEV
 ```
 
-### Hot-Plug, Auto-Detect & 3-Tier Firmware Resolution
+</details>
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant USB as ESP32-WROOM or NodeMCU ESP8266
-    participant UDEV as udev
-    participant SVC as onstep_provision.py
-    participant NET as GitHub (0denko/AstroDrive & OnStepX)
-    participant INDI as indi_lx200_OnStep
+<details>
+<summary><strong>Alternative Installs (Raspberry Pi 3B, Vanilla RPi OS, On-Pi Compiler, Pre-baked CI Image)</strong></summary>
 
-    USB->>UDEV: Plug-in (/dev/ttyUSB0)
-    UDEV->>SVC: Start onstep-autoprovision@ttyUSB0.service
-    SVC->>SVC: flock + check /proc/*/fd (abort if INDI holds port)
-    SVC->>USB: Wait 2.5s, open (DTR=0, RTS=0), send :GVP# @ 9600
-    alt Replies "On-Step#" (and AUTO_UPGRADE=false)
-        USB-->>SVC: On-Step# / 10.29f#
-    else Blank / Random Board (AUTO_FLASH=true)
-        SVC->>USB: esptool --chip auto chip_id (detect esp32 vs esp8266)
-        SVC->>NET: Tier 1: Fetch latest verified profile .bin from GitHub Releases
-        Note over SVC,NET: Tier 2: Use local verified cache if offline<br/>Tier 3: Pull latest hjd1964/OnStepX & live-compile via arduino-cli
-        SVC->>USB: esptool write_flash (0x0 merged ESP32 / 0x00000 ESP8266)
-        SVC->>USB: Hard reset + wait 3.0s + re-verify :GVP#
-        USB-->>SVC: On-Step#
-    end
-    SVC->>INDI: Atomically publish /dev/onstep (+ optional indi_setprop)
-    INDI->>USB: Connect via /dev/onstep @ 9600 baud
-```
+- **Raspberry Pi 3B or vanilla Raspberry Pi OS 64-bit:** Flash 64-bit Raspberry Pi OS with Imager (enable SSH + Wi-Fi in OS Customisation), then run the same one-line `setup.sh` command. Open the Setup Wizard at `http://<pi-hostname>.local:8090/`.
+- **Enable on-Pi OnStepX compilation** (only needed if you edit `Config.h` directly on the Pi):
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/0denko/AstroDrive/main/setup.sh | sudo bash -s -- --with-arduino-cli
+  ```
+- **Pre-baked downloadable `.img.xz`:** Run **Actions → Build Raspberry Pi Overlay Image (.img.xz) → Run workflow** in GitHub Actions to generate a ready-to-flash `.img.xz` with AstroDrive + firmware baked in.
+- **Automated Firmware Builds:** `.github/workflows/build-firmware.yml` compiles both `nodemcu-esp32-tmc2208s` (`esp32:esp32@2.0.17`) and `nodemcu-esp8266-tmc2208s` (`esp8266:esp8266@3.1.2` + `esp8266RfOff` plugin) against upstream `hjd1964/OnStepX` and publishes `.bin` + SHA-256 manifests to [GitHub Releases](https://github.com/0denko/AstroDrive/releases/latest).
 
----
+</details>
 
-## Astroberry Web UI Overlay (Built-In)
-
-`install.sh` (and the CI `.img.xz` builder) automatically integrates AstroDrive directly into **Astroberry OS v3.2+'s** web interface at **`http://astroberry.local`**:
-
-- **Upgrade-safe:** Nginx proxies `/onstep/` to `onstep-webui.service` (`127.0.0.1:8090`) and injects `/onstep/overlay.js` via `sub_filter` — zero `astroberry-manager` package files are modified, and an APT post-invoke hook (`/etc/apt/apt.conf.d/99-onstep-nginx-overlay`) preserves the overlay across `apt upgrade`.
-- **On your phone:** Open `http://astroberry.local` — a live **OnStepX** status pill (`Ready` / `Provisioning…` / `INDI Active`) opens a night-vision drawer with live compile/flash logs, `:GVP#`/`:GVN#` probe, online release fetch, and `AUTO_FLASH`/`AUTO_UPGRADE` toggles.
-- **Standalone fallback (vanilla RPi OS):** Also always reachable at **`http://<pi-hostname>.local:8090/`**.
-
----
-
-## CI Pipelines & Prebuilt Releases
-
-1. **Automated Firmware Builds (`.github/workflows/build-firmware.yml`):**
-   - Pulls latest upstream `hjd1964/OnStepX` weekly (or on push / manual trigger), compiles both ESP32 (`esp32:esp32@2.0.17`) and ESP8266 (`esp8266:esp8266@3.1.2` + `esp8266RfOff` plugin) profiles with `arduino-cli`, and publishes verified `.bin` + `manifest-<profile>.json` files to **[GitHub Releases](https://github.com/0denko/AstroDrive/releases/latest)**.
-2. **Downloadable Ready-to-Flash SD Card Image (`.github/workflows/build-pi-image.yml`):**
-   - Run **Actions → Build Raspberry Pi Overlay Image (.img.xz) → Run workflow** with the latest **Astroberry OS v3.2+** or **Raspberry Pi OS 64-bit** `.img.xz` URL.
-   - Publishes **`astrodrive-pi-YYYY.MM.DD.img.xz`** + `.sha256` to GitHub Releases ready for **Raspberry Pi Imager**.
-
----
-
-## Repository Layout
+<details>
+<summary><strong>Repository Layout &amp; CLI Diagnostics</strong></summary>
 
 ```text
 AstroDrive/
-├── HARDWARE.md                            # Complete motor, power, Vref, and wire-by-wire guide
-├── docs/
-│   ├── wiring-esp32-tmc2208.svg           # Full schematic: ESP32-WROOM + 2× TMC2208
-│   └── wiring-nodemcu-esp8266-tmc2208.svg # Full schematic: NodeMCU ESP8266 + 2× TMC2208
-├── .github/workflows/
-│   ├── build-firmware.yml                 # Weekly/on-demand OnStepX overlay compiler -> Releases
-│   └── build-pi-image.yml                 # Upstream Astroberry / RPi OS + overlay -> .img.xz
+├── setup.sh                               # One-line curl | sudo bash bootstrap installer
 ├── install.sh                             # Idempotent RPi installer (--with-arduino-cli, --chroot)
-├── requirements.txt                       # Pinned esptool 4.x + pyserial
-├── config/
-│   └── onstep-autoprovision.env.example   # TARGET_CHIP=auto, GITHUB_REPO=0denko/AstroDrive
-├── udev/
-│   └── 99-onstep-nodemcu.rules            # CP2102 & CH340 rules + ModemManager ignore
-├── systemd/
-│   ├── onstep-autoprovision@.service      # Async templated oneshot unit (15-min compile timeout)
-│   ├── onstep-firmware-update.service     # Online GitHub Release firmware cache refresher
-│   ├── onstep-firmware-update.timer       # Daily background check (skips cleanly offline)
-│   └── onstep-webui.service               # Local Web UI & Astroberry overlay backend (:8090)
-├── nginx/
-│   └── onstep-astroberry-overlay.conf     # Proxies /onstep/ & injects overlay.js into Astroberry UI
-├── webui/
-│   ├── onstep_webui.py                    # Zero-dependency REST API & dashboard server
-│   ├── index.html                         # Mobile-first dark / night-vision provisioning UI
-│   └── overlay.js                         # Upgrade-safe status pill & slide-out drawer for Astroberry
-├── scripts/
-│   ├── onstep_provision.py                # Auto chip detect, 3-tier fetch/compile, flash & symlink
-│   ├── probe_onstep.py                    # Standalone LX200 :GVP# / :GVN# diagnostic CLI
-│   ├── update_firmware.sh                 # Pulls latest verified .bin + manifest from Releases
-│   ├── setup_hotspot.sh                   # NetworkManager Home Wi-Fi + Dark-Sky Hotspot fallback
-│   └── configure_nginx_overlay.sh         # Idempotent Nginx overlay attach + APT upgrade hook
-└── firmware/
-    ├── README.md                          # TMC2208S jumper microstepping & Vref guide
-    ├── build.sh                           # Multi-profile arduino-cli builder (--profile / --all)
-    ├── platformio.ini                     # Optional PlatformIO config (nodemcuv2)
-    ├── Config.h -> profiles/nodemcu-esp32-tmc2208s/Config.h
-    ├── Extended.config.h -> profiles/nodemcu-esp32-tmc2208s/Extended.config.h
-    └── profiles/
-        ├── nodemcu-esp32-tmc2208s/        # ESP32-WROOM + 2× TMC2208S (pins 25/26/27, 14/12/13)
-        └── nodemcu-esp8266-tmc2208s/      # NodeMCU ESP8266 + 2× TMC2208S (pins 5/4/16, 14/12/13)
+├── HARDWARE.md                            # Full motor, power, Vref, and wire-by-wire guide
+├── docs/                                  # ESP32 & NodeMCU ESP8266 SVG wiring schematics
+├── .github/workflows/                     # Automated OnStepX firmware & Pi .img.xz builders
+├── webui/                                 # Setup Wizard + Dashboard + Astroberry overlay (:8090)
+├── scripts/                               # Auto-provisioner, INDI defaults, hotspot, firmware updater
+├── systemd/ udev/ nginx/ config/          # System services, udev rules, Nginx overlay, config template
+└── firmware/                              # Multi-profile OnStepX overlays (ESP32 + ESP8266 TMC2208S)
 ```
 
----
-
-## Diagnostics
-
 ```bash
-# Live auto-detection, online fetch / live compile, and flashing logs
+# Watch live auto-flash logs
 journalctl -fu 'onstep-autoprovision@*'
 
 # Non-resetting LX200 handshake check
 /opt/onstep-autoprovision/.venv/bin/python \
   /opt/onstep-autoprovision/scripts/probe_onstep.py --device /dev/onstep
 
-# Refresh cached binaries from GitHub Releases
+# Refresh cached firmware binaries from GitHub Releases
 sudo /opt/onstep-autoprovision/scripts/update_firmware.sh --all
-
-# Check Web UI overlay service status
-systemctl status onstep-webui.service
 ```
+
+</details>

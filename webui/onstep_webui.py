@@ -1,28 +1,35 @@
 #!/usr/bin/env python3
 """
-Lightweight, zero-dependency Web UI & REST API for astro-pi-onstep-autoprovision.
+Lightweight, zero-dependency Web UI, Setup Wizard & REST API for AstroDrive.
 
 Runs on port 8090 (exposed cleanly inside Astroberry OS at http://astroberry.local/onstep/
 via Nginx overlay, and also accessible standalone at http://<pi-ip>:8090/).
 
 Endpoints (served under both `/` and `/onstep/`):
-  GET  /                         -> Mobile-friendly OnStepX dashboard (index.html)
-  GET  /overlay.js               -> Astroberry Manager sidebar/drawer overlay script
-  GET  /api/status               -> Live USB, /dev/onstep, INDI lock, cached profiles & config
+  GET  /                         -> Guided Setup Wizard + OnStepX Dashboard (index.html)
+  GET  /overlay.js               -> Astroberry Manager floating button & drawer script
+  GET  /docs/<wiring>.svg        -> Offline wiring diagrams for ESP32 & NodeMCU ESP8266
+  GET  /api/status               -> Live USB, /dev/onstep, INDI lock, Pi power health, Wi-Fi & config
   GET  /api/logs?lines=120       -> Live journalctl output for provisioning & firmware updates
   POST /api/config               -> Update allowlisted settings in /etc/onstep-autoprovision/config.env
   POST /api/action/probe         -> Non-invasive LX200 :GVP#/:GVN# probe (aborts if INDI active)
   POST /api/action/update-cache  -> Background fetch of latest GitHub Release firmware
   POST /api/action/provision     -> Trigger systemd onstep-autoprovision@<tty>.service (INDI-safe)
+  POST /api/action/setup-hotspot -> Configure Home Wi-Fi + Dark-Sky Hotspot via setup_hotspot.sh
+  POST /api/action/configure-indi-> Write INDI LX200 OnStep defaults (/dev/onstep @ 9600 baud)
+  POST /api/action/sync-time     -> Sync Raspberry Pi system clock from phone/laptop browser
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import glob
 import json
 import logging
 import os
 import re
+import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -42,7 +49,14 @@ CONFIG_FILE = Path(os.environ.get("ONSTEP_CONFIG_FILE", "/etc/onstep-autoprovisi
 FIRMWARE_DIR = Path(os.environ.get("FIRMWARE_DIR", "/opt/onstep-autoprovision/firmware"))
 SYMLINK_PATH = Path(os.environ.get("SYMLINK_PATH", "/dev/onstep"))
 RAW_SYMLINK_PATH = Path("/dev/onstep-raw")
-UPDATE_SCRIPT = Path(os.environ.get("UPDATE_SCRIPT", "/opt/onstep-autoprovision/scripts/update_firmware.sh"))
+UPDATE_SCRIPT = Path(os.environ.get("UPDATE_SCRIPT", str(SCRIPTS_DIR / "update_firmware.sh")))
+HOTSPOT_SCRIPT = Path(os.environ.get("HOTSPOT_SCRIPT", str(SCRIPTS_DIR / "setup_hotspot.sh")))
+INDI_SCRIPT = Path(os.environ.get("INDI_SCRIPT", str(SCRIPTS_DIR / "configure_indi_defaults.sh")))
+
+ALLOWED_SVG_FILES = {
+    "wiring-esp32-tmc2208.svg",
+    "wiring-nodemcu-esp8266-tmc2208.svg",
+}
 
 ALLOWED_CONFIG_KEYS = {
     "TARGET_CHIP": re.compile(r"^(auto|esp8266|esp32)$"),
@@ -202,6 +216,104 @@ def probe_if_safe(device: str | None, bauds_csv: str) -> dict[str, Any]:
     return {"state": "unresponsive"}
 
 
+def read_pi_health() -> dict[str, Any]:
+    throttled_hex: str | None = None
+    undervoltage_now = False
+    undervoltage_past = False
+
+    vcgencmd = shutil.which("vcgencmd")
+    if vcgencmd:
+        try:
+            res = subprocess.run([vcgencmd, "get_throttled"], capture_output=True, text=True, timeout=2)
+            m = re.search(r"throttled=(0x[0-9a-fA-F]+)", res.stdout)
+            if m:
+                throttled_hex = m.group(1).lower()
+                val = int(throttled_hex, 16)
+                undervoltage_now = bool(val & 0x1)
+                undervoltage_past = bool(val & 0x10000)
+        except Exception:
+            pass
+
+    indi_configured = False
+    for home_dir in glob.glob("/home/*"):
+        cfg = Path(home_dir) / ".indi" / "LX200 OnStep_config.xml"
+        try:
+            if cfg.is_file() and "/dev/onstep" in cfg.read_text(encoding="utf-8", errors="replace"):
+                indi_configured = True
+                break
+        except OSError:
+            continue
+
+    return {
+        "hostname": socket.gethostname(),
+        "system_time_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "throttled_hex": throttled_hex,
+        "undervoltage_now": undervoltage_now,
+        "undervoltage_past": undervoltage_past,
+        "indi_configured": indi_configured,
+    }
+
+
+def read_network_status() -> dict[str, Any]:
+    nmcli = shutil.which("nmcli")
+    active_wifi = ""
+    hotspot_configured = False
+    hotspot_ssid = ""
+    home_wifi_configured = False
+    home_wifi_ssid = ""
+    ip_addresses: list[str] = []
+
+    try:
+        res = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=2)
+        if res.returncode == 0:
+            ip_addresses = [ip for ip in res.stdout.strip().split() if "." in ip]
+    except Exception:
+        pass
+
+    if nmcli:
+        try:
+            res = subprocess.run(
+                [nmcli, "-t", "-f", "ACTIVE,SSID", "dev", "wifi"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            for line in res.stdout.splitlines():
+                if line.startswith("yes:"):
+                    active_wifi = line.split(":", 1)[1].strip()
+                    break
+        except Exception:
+            pass
+
+        for con_name in ("astropi-hotspot", "home-wifi"):
+            try:
+                res = subprocess.run(
+                    [nmcli, "-g", "802-11-wireless.ssid", "connection", "show", con_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                )
+                if res.returncode == 0 and res.stdout.strip():
+                    if con_name == "astropi-hotspot":
+                        hotspot_configured = True
+                        hotspot_ssid = res.stdout.strip()
+                    else:
+                        home_wifi_configured = True
+                        home_wifi_ssid = res.stdout.strip()
+            except Exception:
+                pass
+
+    return {
+        "nmcli_available": bool(nmcli),
+        "active_wifi": active_wifi,
+        "hotspot_configured": hotspot_configured,
+        "hotspot_ssid": hotspot_ssid,
+        "home_wifi_configured": home_wifi_configured,
+        "home_wifi_ssid": home_wifi_ssid,
+        "ip_addresses": ip_addresses,
+    }
+
+
 def build_status(run_probe: bool = False) -> dict[str, Any]:
     cfg = read_config_env()
     tty, symlink_ready = resolve_active_tty()
@@ -235,6 +347,8 @@ def build_status(run_probe: bool = False) -> dict[str, Any]:
         "probe": probe_info,
         "cached_profiles": list_cached_profiles(),
         "config": {k: cfg[k] for k in ALLOWED_CONFIG_KEYS if k in cfg},
+        "health": read_pi_health(),
+        "network": read_network_status(),
     }
 
 
@@ -258,13 +372,20 @@ def read_logs(lines: int = 120) -> str:
             text=True,
             timeout=5,
         )
-        return res.stdout or "(No provisioning logs yet — plug in a NodeMCU board.)"
+        return res.stdout or "(No provisioning logs yet — plug in an ESP32 or NodeMCU board.)"
     except Exception as exc:
         return f"[ERROR] Unable to read journalctl logs: {exc}"
 
 
+def _clean_wifi_str(val: Any, max_len: int = 64) -> str:
+    s = str(val or "").strip()
+    if len(s) > max_len or any(ord(c) < 32 or ord(c) == 127 for c in s):
+        raise ValueError("Invalid characters or length in Wi-Fi field.")
+    return s
+
+
 class OnStepWebUIHandler(BaseHTTPRequestHandler):
-    server_version = "OnStepOverlayWebUI/1.0"
+    server_version = "OnStepOverlayWebUI/2.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         LOG.info("%s - %s", self.address_string(), fmt % args)
@@ -314,6 +435,15 @@ class OnStepWebUIHandler(BaseHTTPRequestHandler):
             self._send_file(WEBUI_DIR / "index.html", "text/html; charset=utf-8")
         elif path == "/overlay.js":
             self._send_file(WEBUI_DIR / "overlay.js", "application/javascript; charset=utf-8")
+        elif path.startswith("/docs/"):
+            fname = path[len("/docs/") :]
+            if fname in ALLOWED_SVG_FILES:
+                candidate = WEBUI_DIR / "docs" / fname
+                if not candidate.is_file():
+                    candidate = WEBUI_DIR.parent / "docs" / fname
+                self._send_file(candidate, "image/svg+xml; charset=utf-8")
+            else:
+                self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
         elif path == "/api/status":
             do_probe = qs.get("probe", ["0"])[0] in {"1", "true"}
             self._send_json(build_status(run_probe=do_probe))
@@ -358,7 +488,7 @@ class OnStepWebUIHandler(BaseHTTPRequestHandler):
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-                self._send_json({"ok": True, "message": "Triggered background firmware cache refresh."})
+                self._send_json({"ok": True, "message": "Downloading latest firmware from GitHub Releases…"})
             except Exception as exc:
                 self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
@@ -366,14 +496,14 @@ class OnStepWebUIHandler(BaseHTTPRequestHandler):
         if path == "/api/action/provision":
             tty, _ = resolve_active_tty()
             if not tty:
-                self._send_json({"ok": False, "error": "No NodeMCU USB serial device found."}, HTTPStatus.NOT_FOUND)
+                self._send_json({"ok": False, "error": "No ESP32 or NodeMCU USB board detected. Plug it in first."}, HTTPStatus.NOT_FOUND)
                 return
             holders = find_device_holders(tty)
             if any("indi_lx200" in c or "indiserver" in c for _, c in holders):
                 self._send_json(
                     {
                         "ok": False,
-                        "error": "indi_lx200_OnStep is actively connected. Disconnect the mount in Astroberry/Ekos first.",
+                        "error": "KStars/Ekos (INDI) is currently connected to the mount. Disconnect the mount first.",
                     },
                     HTTPStatus.CONFLICT,
                 )
@@ -390,6 +520,80 @@ class OnStepWebUIHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
 
+        if path == "/api/action/setup-hotspot":
+            if not HOTSPOT_SCRIPT.is_file():
+                self._send_json({"ok": False, "error": "setup_hotspot.sh not installed"}, HTTPStatus.NOT_FOUND)
+                return
+            try:
+                ap_ssid = _clean_wifi_str(body.get("ap_ssid") or "AstroPi-OnStep", 32)
+                ap_pass = _clean_wifi_str(body.get("ap_pass") or "", 63)
+                home_ssid = _clean_wifi_str(body.get("home_ssid") or "", 32)
+                home_pass = _clean_wifi_str(body.get("home_pass") or "", 63)
+                if not ap_ssid:
+                    raise ValueError("Field Hotspot Name cannot be empty.")
+                if len(ap_pass) < 8:
+                    raise ValueError("Field Hotspot Password must be at least 8 characters.")
+                if home_ssid and len(home_pass) < 8:
+                    raise ValueError("Home Wi-Fi Password must be at least 8 characters.")
+
+                cmd = [str(HOTSPOT_SCRIPT), "--ap-ssid", ap_ssid, "--ap-pass", ap_pass]
+                if home_ssid:
+                    cmd.extend(["--home-ssid", home_ssid, "--home-pass", home_pass])
+
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+                if res.returncode != 0:
+                    err_msg = (res.stderr or res.stdout or "Failed to configure Wi-Fi/Hotspot").strip()
+                    self._send_json({"ok": False, "error": err_msg}, HTTPStatus.INTERNAL_SERVER_ERROR)
+                    return
+                msg = f"Saved! Field hotspot '{ap_ssid}' (10.42.0.1) is ready."
+                if home_ssid:
+                    msg = f"Saved! Home Wi-Fi '{home_ssid}' + field hotspot '{ap_ssid}' (10.42.0.1) are ready."
+                self._send_json({"ok": True, "message": msg})
+            except ValueError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        if path == "/api/action/configure-indi":
+            if not INDI_SCRIPT.is_file():
+                self._send_json({"ok": False, "error": "configure_indi_defaults.sh not installed"}, HTTPStatus.NOT_FOUND)
+                return
+            try:
+                res = subprocess.run([str(INDI_SCRIPT), "--force"], capture_output=True, text=True, timeout=10)
+                if res.returncode != 0:
+                    self._send_json(
+                        {"ok": False, "error": (res.stderr or res.stdout or "Failed to apply INDI defaults").strip()},
+                        HTTPStatus.INTERNAL_SERVER_ERROR,
+                    )
+                    return
+                self._send_json({"ok": True, "message": "INDI LX200 OnStep defaults saved (/dev/onstep @ 9600 baud)."})
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        if path == "/api/action/sync-time":
+            try:
+                epoch_ms = int(body.get("epoch_ms", 0))
+                epoch_sec = epoch_ms // 1000
+                # Sanity check: 2024-01-01 to 2040-01-01
+                if epoch_sec < 1704067200 or epoch_sec > 2208988800:
+                    raise ValueError("Invalid timestamp received from browser.")
+                res = subprocess.run(["date", "-u", "-s", f"@{epoch_sec}"], capture_output=True, text=True, timeout=5)
+                if res.returncode != 0:
+                    self._send_json(
+                        {"ok": False, "error": (res.stderr or "Unable to set system clock").strip()},
+                        HTTPStatus.INTERNAL_SERVER_ERROR,
+                    )
+                    return
+                now_str = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+                self._send_json({"ok": True, "message": f"Pi clock synced to {now_str}", "system_time_utc": now_str})
+            except (ValueError, TypeError) as exc:
+                self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
         self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
 
@@ -398,7 +602,7 @@ def main() -> int:
     host = os.environ.get("WEBUI_HOST", "0.0.0.0")
     port = int(os.environ.get("WEBUI_PORT", "8090"))
     httpd = ThreadingHTTPServer((host, port), OnStepWebUIHandler)
-    LOG.info("OnStepX Astroberry Overlay Web UI listening on http://%s:%d/onstep/", host, port)
+    LOG.info("AstroDrive Web UI & Setup Wizard listening on http://%s:%d/onstep/", host, port)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

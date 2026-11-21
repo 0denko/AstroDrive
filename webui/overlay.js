@@ -110,10 +110,10 @@
     drawer.id = 'onstep-overlay-drawer';
     drawer.innerHTML = `
       <div id="onstep-overlay-bar">
-        <span>OnStepX Auto-Provisioner</span>
+        <span>AstroDrive — OnStepX Setup &amp; Status</span>
         <button id="onstep-overlay-close" type="button">✕ Close</button>
       </div>
-      <iframe id="onstep-overlay-frame" title="OnStepX Auto-Provisioner"></iframe>
+      <iframe id="onstep-overlay-frame" title="AstroDrive Setup Wizard"></iframe>
     `;
 
     document.body.appendChild(pill);
@@ -152,23 +152,23 @@
         dot.className = '';
         if (s.provisioning_active) {
           dot.classList.add('warn');
-          label.textContent = 'OnStepX • Provisioning…';
+          label.textContent = 'AstroDrive • Flashing…';
         } else if (s.indi_active) {
           dot.classList.add('ok');
-          label.textContent = 'OnStepX • INDI Active';
+          label.textContent = 'AstroDrive • Mount Connected';
         } else if (s.symlink_ready) {
           dot.classList.add('ok');
-          label.textContent = 'OnStepX • Ready';
+          label.textContent = 'AstroDrive • Ready';
         } else if (s.device) {
           dot.classList.add('warn');
-          label.textContent = 'OnStepX • Unverified';
+          label.textContent = 'AstroDrive • Board Detected';
         } else {
           dot.classList.add('err');
-          label.textContent = 'OnStepX • Disconnected';
+          label.textContent = 'AstroDrive Setup';
         }
       } catch (_) {
         dot.className = 'err';
-        label.textContent = 'OnStepX • Offline';
+        label.textContent = 'AstroDrive • Offline';
       }
     }
 
