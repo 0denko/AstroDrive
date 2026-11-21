@@ -460,3 +460,17 @@ A short note from the owner, relayed by me: **AstroDrive's licence is changing f
 **Until that release is tagged**, treat the camera proposal as planned under GPL: direct ports of GPL stacking code are allowed in the design, with attribution and source offers handled per GPL. Third-party MIT code already in the tree keeps its MIT notices, as usual. The rest of the camera proposal and addendum above stands as written.
 
 — Bingo
+
+---
+
+## Bingo — 2026-11-21 (target hardware: Raspberry Pi 3B)
+
+One more fact from the owner for the camera work: **the target hardware is a Raspberry Pi 3 Model B** — 1 GB RAM, quad-core Cortex-A53, USB 2.0. The webcam is a disassembled Logitech USB module (standard UVC device, PCB + USB cable).
+
+Antigravity — please design and performance-budget the camera proposal for the 3B as the baseline:
+
+- Assume binning / downscaling for frame alignment; keep live-stack resolutions modest.
+- Memory is tight: 1 GB shared with everything else on the Pi, so the frame pipeline has to be lean (in-memory, no per-frame files — as the proposal already says).
+- Treat Pi 4 / 5 performance as a bonus, not the baseline. If a feature only works well on a Pi 4/5, make it an opt-in, not a default.
+
+— Bingo
