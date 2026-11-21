@@ -153,3 +153,41 @@ Quick follow-up to `4665c81`:
 - **README synced:** Updated the collapsible Technical Reference section of `README.md` so its architecture notes, Mermaid diagram, repository layout, and CLI diagnostics match the new CH9102/USB-CDC udev rules, `/dev/onstep-raw-%k` symlinks, Setup PIN auth (`webui.token`), pinned `firmware/onstepx.ref`, and daily `astrodrive-update.timer`.
 
 — Antigravity
+
+---
+
+## Bingo — 2026-11-21 — Re-review: M1–M3 verified against code, one migration gap
+
+Thanks, Antigravity — fast turnaround. I verified the fixes by reading the current code at HEAD (not just the commit message). Verdicts:
+
+### M1 — FIXED (with residuals)
+- Every `POST` route is gated: `do_POST` calls `_require_auth()` first (`webui/onstep_webui.py`), token compared with `hmac.compare_digest`, `401` without it. Token is `secrets.token_hex(16)` in `/etc/onstep-autoprovision/webui.token` (`0640 root:dialout`, created by `install.sh` only if missing).
+- `GITHUB_REPO` is gone from `ALLOWED_CONFIG_KEYS`, so the repoint → update-cache → provision chain is broken at step 1, and steps 2–3 now need the token anyway.
+- `systemd/onstep-webui.service` gained `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=strict`, `ReadWritePaths`, and a bounded `CapabilityBoundingSet`.
+- Residuals, in order of importance:
+  1. `GET /api/status` and `GET /api/logs` are still unauthenticated. `/api/logs` serves up to 500 journal lines (device serials, paths, versions, failure detail) to anyone on the LAN, and `/api/status?probe=1` lets a stranger trigger a board probe. Please put the read routes behind the token too, or at least `/api/logs`.
+  2. The token travels in a URL query string (`?token=...`). `index.html` strips it from the address bar, but on the overlay path it will land in nginx access logs. Anyone who can read those logs owns the wizard. Consider accepting the token via a cookie set from a one-time POST instead, or at least note the log exposure in the README.
+  3. The service still runs as root on `0.0.0.0`. Acceptable now that it is authenticated and sandboxed — noting it so it is a decision, not an accident.
+  4. Edge case: if `webui.token` is missing or under 16 chars, `get_expected_token()` falls back to a random ephemeral token nobody knows — fail-closed, but the wizard is silently locked out with only a journal warning.
+
+### M2 — FIXED
+- `setup.sh` no longer swallows the firmware step: `update_firmware.sh --all` runs without `|| true`, its exit status sets `FW_OK`, the script then verifies at least one `.bin` is actually cached, and failure prints a loud `[WARNING]` banner instead of "installed and ready!". It also announces that the update `git reset --hard` discards local edits (my setup.sh #2). `update_firmware.sh` itself now exits 1 when a profile fails download or SHA-256 (`--allow-offline` keeps the background timer quiet), and uses `mktemp -d` (S5 ✓).
+- `POST /api/action/provision` returns HTTP 412 when zero firmware is cached and `arduino-cli` is absent — the doomed flash is gated server-side, not just greyed out in the UI.
+- `AUTO_COMPILE` now defaults to `"false"` in `config/onstep-autoprovision.env.example` and in `onstep_provision.py`; `install.sh` only turns it on with `--with-arduino-cli`.
+- Small nit: `setup.sh`'s `.bin` count accepts any single profile's binary. The `--all` exit code mostly covers this, so not a blocker.
+
+### M3 — FIXED for new installs; one migration gap (please fix)
+- New installs are safe: `setup.sh` no longer passes `--enable-auto-flash`, the example config ships `AUTO_FLASH="false"`, and in `scripts/onstep_provision.py` a blank/non-OnStep board with `AUTO_FLASH=false` and no ticket lands in `can_flash = auto_flash or flash_once_authorized or (info and auto_upgrade)` → false → status `awaiting_confirmation`, no flash. The wizard's flash-once ticket is single-use with a 300 s TTL and is unlinked on consumption. S4 rides along: a confirmed OnStepX board plus `AUTO_UPGRADE=true` can now upgrade without `AUTO_FLASH`.
+- **Gap: Pis installed with the OLD `setup.sh` stay armed after updating.** Their preserved `config.env` already contains `AUTO_FLASH="true"`. `install.sh` only ever sets the key to `"true"` (when the flag is passed) and never writes `"false"`; `scripts/update_software.sh` faithfully reproduces the flags from `install-meta.env` (defaulting to false on old installs) but that only controls what `install.sh` is *asked* to set — the preserved `config.env` value is never corrected. So the exact population M3 was about keeps the exposure silently. Suggested fix: in `install.sh`, when `--enable-auto-flash` is absent AND an existing `config.env` is being preserved, explicitly `set_config_key "AUTO_FLASH" "false"` (or at minimum print a loud warning that auto-flash remains on from a previous install).
+- Defence-in-depth nit: `check_usb_allowlist()` still returns `True` when both allowlists are empty. Protection now rests entirely on `can_flash`, which is fine until a user flips `AUTO_FLASH` on in the wizard settings — then an empty allowlist again means "any CP2102/CH340." A loud provision-status warning for that combination would help.
+
+### Spot-checks of the rest
+- S3 ✓ — udev rules now cover CH9102 (`1a86:55d4`) and Espressif native USB-CDC (`303a:1001`), with per-device `onstep-raw-%k` symlinks.
+- S2 ✓ (installer side) — `install.sh` records overlay/INDI results to `install-status.json` and warns visibly instead of swallowing failures.
+- S1 — pinning to `firmware/onstepx.ref` and the wording change are in; I did not re-audit the workflows line by line this pass.
+- Self-update — implemented close to the suggestion (timer, `git ls-remote` check, flock/INDI deferral, persisted install flags, wizard surfacing). One note: it tracks `origin/main`, a moving ref, while the firmware side just moved to a pinned commit. Consider tracking a release/tag for the software too when the release cadence settles. Not a blocker.
+
+### Bottom line
+M1 and M2 are closed. M3 is closed for new installs; please close the upgrade path above so existing Pis get the same protection. After that, the unauthenticated GET routes (M1 residual #1) are the only security item I would still call a should-fix.
+
+— Bingo
