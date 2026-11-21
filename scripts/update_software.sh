@@ -1,18 +1,6 @@
 #!/usr/bin/env bash
 # Lightweight, safety-gated self-updater for AstroDrive software (scripts, Web UI,
-# systemd units, udev rules, firmware profiles).
-#
-# Safety guarantees:
-#   - Opt-out via AUTO_UPDATE_SOFTWARE="false" in /etc/onstep-autoprovision/config.env
-#     (override with --force when triggered manually from the Web UI or CLI).
-#   - Skips cleanly when offline.
-#   - Never interrupts an active provisioning/flash (checks /run/lock/onstep-provision.lock)
-#     or an active INDI telescope session (checks /proc/*/fd for indi_lx200 / indiserver).
-#   - Compares installed commit SHA against origin/main via `git ls-remote`; exits quietly
-#     when already up to date.
-#   - Re-runs install.sh with the original install flags persisted in install-meta.env.
-#   - Writes status to /var/lib/onstep-autoprovision/software-update.json so the Setup
-#     Wizard and Dashboard always show whether an update was applied, deferred, or failed.
+# systemd units, udev rules, firmware profiles) with automatic rollback on failure (#10).
 set -euo pipefail
 
 FORCE="false"
@@ -25,6 +13,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMMON_PY="${SCRIPT_DIR}/onstep_common.py"
 CONFIG_FILE="/etc/onstep-autoprovision/config.env"
 META_FILE="/etc/onstep-autoprovision/install-meta.env"
 STATE_DIR="/var/lib/onstep-autoprovision"
@@ -52,18 +42,21 @@ write_state() {
   local status="$1"
   local message="$2"
   local remote_sha="${3:-}"
-  mkdir -p "${STATE_DIR}" 2>/dev/null || true
-  python3 - "${STATE_FILE}" "${status}" "${message}" "${INSTALLED_VERSION}" "${INSTALLED_COMMIT}" "${remote_sha}" <<'PY' 2>/dev/null || true
-import datetime as dt, json, pathlib, sys
-p = pathlib.Path(sys.argv[1])
-p.write_text(json.dumps({
-    "status": sys.argv[2],
-    "message": sys.argv[3],
-    "installed_version": sys.argv[4],
-    "installed_commit": sys.argv[5],
-    "remote_commit": sys.argv[6],
-    "checked_at_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-}, indent=2) + "\n", encoding="utf-8")
+  local now_utc
+  now_utc="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  python3 - "${COMMON_PY}" "${STATE_FILE}" "${status}" "${message}" "${INSTALLED_VERSION}" "${INSTALLED_COMMIT}" "${remote_sha}" "${now_utc}" <<'PY' 2>/dev/null || true
+import importlib.util, pathlib, sys
+spec = importlib.util.spec_from_file_location("onstep_common", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+mod.write_json_atomic(pathlib.Path(sys.argv[2]), {
+    "status": sys.argv[3],
+    "message": sys.argv[4],
+    "installed_version": sys.argv[5],
+    "installed_commit": sys.argv[6],
+    "remote_commit": sys.argv[7],
+    "checked_at_utc": sys.argv[8],
+})
 PY
 }
 
@@ -72,33 +65,6 @@ if [ "${FORCE}" != "true" ] && [ "${CHECK_ONLY}" != "true" ] && [ "${AUTO_UPDATE
   write_state "disabled" "Automatic software updates are disabled in settings."
   exit 0
 fi
-
-# Check whether INDI is actively controlling the mount (never disturb a live session)
-indi_is_active() {
-  python3 - <<'PY'
-import os, pathlib, sys
-for entry in os.scandir("/proc"):
-    if not entry.name.isdigit():
-        continue
-    try:
-        comm = (pathlib.Path(entry.path) / "comm").read_text(errors="replace").strip()
-    except OSError:
-        continue
-    if "indi_lx200" in comm or "indiserver" in comm:
-        fd_dir = pathlib.Path(entry.path) / "fd"
-        try:
-            for fd in fd_dir.iterdir():
-                try:
-                    target = os.path.realpath(str(fd))
-                    if target.startswith("/dev/ttyUSB") or target.startswith("/dev/ttyACM"):
-                        sys.exit(0)
-                except OSError:
-                    continue
-        except OSError:
-            continue
-sys.exit(1)
-PY
-}
 
 # Quick remote check (fails cleanly when offline)
 REPO_URL="https://github.com/${GITHUB_REPO}.git"
@@ -124,8 +90,8 @@ if [ "${CHECK_ONLY}" = "true" ]; then
   exit 0
 fi
 
-# Safety gate: defer if INDI is active or if provisioning holds the flock
-if indi_is_active; then
+# Safety gate (#12): defer if INDI is active (via shared onstep_common.py) or if flashing holds lock
+if python3 "${COMMON_PY}" indi-active; then
   echo "[INFO] Active INDI telescope session detected; deferring software update until next cycle."
   write_state "deferred_busy" "Update available (${REMOTE_SHORT}), deferred while INDI session is active." "${REMOTE_SHA}"
   exit 0
@@ -137,6 +103,12 @@ if ! flock -n 9; then
   echo "[INFO] Provisioning/flashing is in progress; deferring software update until next cycle."
   write_state "deferred_busy" "Update available (${REMOTE_SHORT}), deferred while flashing is in progress." "${REMOTE_SHA}"
   exit 0
+fi
+
+# #10: Record previous commit before fetching so we can roll back cleanly if install.sh fails
+PREV_SHA=""
+if [ -d "${SRC_DIR}/.git" ]; then
+  PREV_SHA="$(git -C "${SRC_DIR}" rev-parse HEAD 2>/dev/null || true)"
 fi
 
 echo "==> Updating AstroDrive software (${INSTALLED_COMMIT:0:7} -> ${REMOTE_SHORT})..."
@@ -173,7 +145,18 @@ if "${SRC_DIR}/install.sh" "${INSTALL_ARGS[@]}"; then
   echo "==> AstroDrive software updated to v${NEW_VER} (${REMOTE_SHORT})."
   write_state "updated" "Updated to v${NEW_VER} (${REMOTE_SHORT})." "${REMOTE_SHA}"
 else
-  echo "[ERROR] install.sh failed during software self-update." >&2
-  write_state "error" "Self-update failed while running install.sh (check journalctl -u astrodrive-update)." "${REMOTE_SHA}"
+  echo "[ERROR] install.sh failed on ${REMOTE_SHORT}; attempting rollback..." >&2
+  if [ -n "${PREV_SHA}" ] && [ -d "${SRC_DIR}/.git" ]; then
+    if git -C "${SRC_DIR}" fetch --depth 1 origin "${PREV_SHA}" >/dev/null 2>&1 || git -C "${SRC_DIR}" cat-file -e "${PREV_SHA}^{commit}" 2>/dev/null; then
+      git -C "${SRC_DIR}" reset --hard "${PREV_SHA}" || true
+      chmod +x "${SRC_DIR}/install.sh" 2>/dev/null || true
+      if "${SRC_DIR}/install.sh" "${INSTALL_ARGS[@]}"; then
+        echo "==> Rollback to ${PREV_SHA:0:7} succeeded."
+        write_state "error" "Update to ${REMOTE_SHORT} failed and rolled back cleanly to ${PREV_SHA:0:7}." "${REMOTE_SHA}"
+        exit 1
+      fi
+    fi
+  fi
+  write_state "error" "Self-update to ${REMOTE_SHORT} failed (check journalctl -u astrodrive-update)." "${REMOTE_SHA}"
   exit 1
 fi

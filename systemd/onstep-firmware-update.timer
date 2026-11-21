@@ -1,9 +1,10 @@
 [Unit]
-Description=Daily check for updated OnStepX firmware releases (skips cleanly when offline)
+Description=Daily check for updated OnStepX firmware releases
 
 [Timer]
 OnBootSec=3min
 OnUnitActiveSec=24h
+RandomizedDelaySec=1h
 Persistent=true
 
 [Install]

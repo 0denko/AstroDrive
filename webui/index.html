@@ -378,9 +378,9 @@
 
         <div class="msg" id="wizMsg3"></div>
 
-        <details style="margin-top: 10px;">
+        <details id="wizLogDetails" style="margin-top: 10px;">
           <summary>Show live technical log</summary>
-          <pre id="wizLogsPre">Loading logs…</pre>
+          <pre id="wizLogsPre">Open to load logs…</pre>
         </details>
 
         <div class="nav-bar">
@@ -505,6 +505,10 @@
             <input type="text" id="cfg_GITHUB_REPO" readonly />
           </div>
         </div>
+        <div id="unrestrictedAutoFlashBanner" class="banner err hidden" style="margin-top: 10px; margin-bottom: 0;">
+          <div class="banner-title">⚠️ Unattended Auto-Flash armed with no USB allowlist</div>
+          <div class="check-sub">Any CP2102/CH340/CH9102 board plugged into this Pi will be flashed automatically. Turn off Auto-Flash Blank Boards (recommended) or flash your mount once via Wizard Step 3 to save its USB serial/port allowlist.</div>
+        </div>
         <div class="actions" style="margin-top: 10px;">
           <button class="primary" id="saveCfgBtn" type="button">💾 Save Settings</button>
         </div>
@@ -531,14 +535,22 @@
       }[c]));
     }
 
-    // M1: Capture ?token=... from setup.sh URL, persist in localStorage, and strip from URL bar
+    // M1 #2: Capture #token=... hash fragment (never logged by Nginx!) or ?token=... fallback
     function initTokenFromUrl() {
+      let urlTok = '';
+      const hash = window.location.hash || '';
+      const hashMatch = hash.match(/(?:^#|&)token=([^&]+)/);
+      if (hashMatch) {
+        urlTok = decodeURIComponent(hashMatch[1]).trim();
+      }
       const params = new URLSearchParams(window.location.search);
-      const urlTok = (params.get('token') || '').trim();
+      if (!urlTok && params.get('token')) {
+        urlTok = params.get('token').trim();
+      }
       if (urlTok) {
         localStorage.setItem('astrodrive_token', urlTok);
         params.delete('token');
-        const cleanUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '') + window.location.hash;
+        const cleanUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
         window.history.replaceState({}, '', cleanUrl);
       }
       updateAuthBarVisibility();
@@ -580,6 +592,7 @@
       $('tabWizard').classList.toggle('active', isWiz);
       $('tabDash').classList.toggle('active', !isWiz);
       localStorage.setItem('astrodrive_view', mode);
+      if (!isWiz) refreshLogsOnly();
     }
 
     function goStep(step) {
@@ -612,6 +625,19 @@
       if (s.provisioning_active) dot.classList.add('warn');
       else if (s.symlink_ready) dot.classList.add('ok');
       else dot.classList.add('err');
+
+      if (s.token_file_error) {
+        updateAuthBarVisibility(true);
+        setMsg('authMsg', 'Setup token file (/etc/onstep-autoprovision/webui.token) is missing or invalid. Re-run sudo /opt/astrodrive-src/install.sh on the Pi.', 'err');
+      } else if (s.authenticated === false) {
+        updateAuthBarVisibility(true);
+        return;
+      }
+
+      const unrestrictedBanner = $('unrestrictedAutoFlashBanner');
+      if (unrestrictedBanner) {
+        unrestrictedBanner.classList.toggle('hidden', !s.auto_flash_unrestricted_warning);
+      }
 
       const health = s.health || {};
       const net = s.network || {};
@@ -812,13 +838,19 @@
       }
     }
 
-    async function refreshAll(probe = false) {
+    function shouldFetchLogs() {
+      if (!getToken()) return false;
+      const dashVisible = !$('dashView').classList.contains('hidden');
+      const wizDetails = $('wizLogDetails');
+      const wizLogsOpen = wizDetails && wizDetails.open && currentStep === 3;
+      const activeFlash = Boolean(latestStatus && latestStatus.provisioning_active);
+      return dashVisible || wizLogsOpen || activeFlash;
+    }
+
+    async function refreshLogsOnly() {
+      if (!getToken()) return;
       try {
-        const [st, lg] = await Promise.all([
-          api(`/api/status${probe ? '?probe=1' : ''}`),
-          api('/api/logs?lines=120'),
-        ]);
-        if (st.ok) renderStatus(st.data);
+        const lg = await api('/api/logs?lines=120');
         if (lg.ok) {
           for (const preId of ['logsPre', 'wizLogsPre']) {
             const pre = $(preId);
@@ -827,6 +859,17 @@
             pre.textContent = lg.data.logs;
             if (atBottom) pre.scrollTop = pre.scrollHeight;
           }
+        }
+      } catch (_) {}
+    }
+
+    async function refreshAll(probe = false) {
+      if (document.hidden && !probe) return;
+      try {
+        const st = await api(`/api/status${probe ? '?probe=1' : ''}`);
+        if (st.ok) renderStatus(st.data);
+        if (st.ok && st.data.authenticated !== false && shouldFetchLogs()) {
+          await refreshLogsOnly();
         }
       } catch (err) {
         setMsg('actionMsg', `Connection error: ${err.message}`, 'err');
@@ -844,11 +887,19 @@
         $('pinInput').value = '';
         setMsg('authMsg', '');
         updateAuthBarVisibility(false);
+        refreshAll(false);
       } else {
         localStorage.removeItem('astrodrive_token');
         setMsg('authMsg', res.data.error || 'Incorrect Setup PIN.', 'err');
       }
     });
+
+    const wizLogDetails = $('wizLogDetails');
+    if (wizLogDetails) {
+      wizLogDetails.addEventListener('toggle', () => {
+        if (wizLogDetails.open) refreshLogsOnly();
+      });
+    }
 
     // Tabs & Stepper
     $('tabWizard').addEventListener('click', () => switchTab('wizard'));
@@ -995,7 +1046,8 @@
     switchTab(savedView || (wizDone ? 'dash' : 'wizard'));
 
     refreshAll(false);
-    setInterval(() => refreshAll(false), 3000);
+    setInterval(() => refreshAll(false), 6000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshAll(false); });
   </script>
 </body>
 </html>

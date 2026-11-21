@@ -74,18 +74,60 @@ jobs:
           path: firmware/prebuilt/
           retention-days: 30
 
-      - name: Publish GitHub Release
+      - name: Publish GitHub Release (skip if source fingerprint unchanged)
         if: >-
           (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true') ||
           github.event_name == 'schedule' ||
           github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO_SLUG: ${{ github.repository }}
         run: |
-          DATE_TAG="firmware-$(date -u +%Y.%m.%d-%H%M)"
-          ESP32_VER="$(python3 -c 'import json; print(json.load(open("release-assets/manifest-nodemcu-esp32-tmc2208s.json"))["firmware_version"])')"
-          ESP32_SHA="$(python3 -c 'import json; print(json.load(open("release-assets/manifest-nodemcu-esp32-tmc2208s.json"))["onstepx_commit"])')"
-          gh release create "${DATE_TAG}" release-assets/* \
-            --title "OnStepX v${ESP32_VER} (${ESP32_SHA}) — ESP32 & ESP8266 TMC2208S Overlay" \
-            --notes "Automated overlay build against upstream \`hjd1964/OnStepX\` commit \`${ESP32_SHA}\`.\n\nIncluded profiles:\n- \`nodemcu-esp32-tmc2208s\` (ESP32-WROOM / NodeMCU-32S + 2× TMC2208S)\n- \`nodemcu-esp8266-tmc2208s\` (NodeMCU ESP8266 + 2× TMC2208S)" \
-            --latest
+          SHOULD_PUBLISH="true"
+          if [ "${EVENT_NAME}" != "workflow_dispatch" ]; then
+            ALL_MATCH="true"
+            for mf in release-assets/manifest-*.json; do
+              name="$(basename "${mf}")"
+              prev_mf="/tmp/prev-${name}"
+              if curl -fsSL "https://github.com/${REPO_SLUG}/releases/latest/download/${name}" -o "${prev_mf}" 2>/dev/null; then
+                if ! python3 - "${mf}" "${prev_mf}" <<'PY'
+          import json, sys
+          cur = json.load(open(sys.argv[1]))
+          prev = json.load(open(sys.argv[2]))
+          ok = (
+              cur.get("onstepx_commit") == prev.get("onstepx_commit")
+              and cur.get("source_fingerprint")
+              and cur.get("source_fingerprint") == prev.get("source_fingerprint")
+          )
+          sys.exit(0 if ok else 1)
+          PY
+                then
+                  ALL_MATCH="false"
+                fi
+              else
+                ALL_MATCH="false"
+              fi
+            done
+            if [ "${ALL_MATCH}" = "true" ]; then
+              echo "==> Firmware source_fingerprint and onstepx_commit match latest release; skipping duplicate publish."
+              SHOULD_PUBLISH="false"
+            fi
+          fi
+
+          if [ "${SHOULD_PUBLISH}" = "true" ]; then
+            DATE_TAG="firmware-$(date -u +%Y.%m.%d-%H%M)"
+            ESP32_VER="$(python3 -c 'import json; print(json.load(open("release-assets/manifest-nodemcu-esp32-tmc2208s.json"))["firmware_version"])')"
+            ESP32_SHA="$(python3 -c 'import json; print(json.load(open("release-assets/manifest-nodemcu-esp32-tmc2208s.json"))["onstepx_commit"])')"
+            gh release create "${DATE_TAG}" release-assets/* \
+              --title "OnStepX v${ESP32_VER} (${ESP32_SHA}) — ESP32 & ESP8266 TMC2208S Overlay" \
+              --notes "Automated overlay build against pinned upstream \`hjd1964/OnStepX\` commit \`${ESP32_SHA}\`.\n\nIncluded profiles:\n- \`nodemcu-esp32-tmc2208s\` (ESP32-WROOM / NodeMCU-32S + 2× TMC2208S)\n- \`nodemcu-esp8266-tmc2208s\` (NodeMCU ESP8266 + 2× TMC2208S)" \
+              --latest
+
+            # Prune old firmware-* releases beyond the newest 5
+            OLD_TAGS="$(gh release list --limit 50 --json tagName --jq '[.[] | select(.tagName | startswith("firmware-")) | .tagName][5:][]' || true)"
+            for tag in ${OLD_TAGS}; do
+              echo "==> Pruning old firmware release: ${tag}"
+              gh release delete "${tag}" --yes --cleanup-tag || true
+            done
+          fi

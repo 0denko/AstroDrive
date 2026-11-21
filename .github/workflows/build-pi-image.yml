@@ -43,6 +43,11 @@ jobs:
           python-version: '3.12'
       - run: pip install -r requirements.txt
       - uses: arduino/setup-arduino-cli@v2
+      - name: Cache Arduino cores & downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.arduino15
+          key: arduino-cores-esp8266-3.1.2-esp32-2.0.17
       - name: Build latest OnStepX firmware for all NodeMCU profiles
         env:
           ONSTEPX_REF: ${{ github.event.inputs.onstepx_ref }}

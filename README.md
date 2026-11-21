@@ -54,7 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/0denko/AstroDrive/main/setup.sh | s
 
 ### Step 4 — Click Through the Setup Wizard in Your Browser
 
-1. Open the **Setup Wizard link** printed at the end of Step 3 (`http://astroberry.local/onstep/?token=...`, or the direct fallback `http://astroberry.local:8090/?token=...`).
+1. Open the **Setup Wizard link** printed at the end of Step 3 (`http://astroberry.local/onstep/#token=...`, or the direct fallback `http://astroberry.local:8090/#token=...` — the `#token` fragment stays inside your browser and is never written to server logs).
    - *(If you open `http://astroberry.local` later without the link, click **`AstroDrive Setup`** in the bottom-right corner and paste the Setup PIN from `/etc/onstep-autoprovision/webui.token` once.)*
 2. Click **Next →** through the 5 guided screens:
 
@@ -151,7 +151,7 @@ flowchart LR
 <details>
 <summary><strong>Alternative Installs (Raspberry Pi 3B, Vanilla RPi OS, On-Pi Compiler, Pre-baked CI Image)</strong></summary>
 
-- **Raspberry Pi 3B or vanilla Raspberry Pi OS 64-bit:** Flash 64-bit Raspberry Pi OS with Imager (enable SSH + Wi-Fi in OS Customisation), then run the same one-line `setup.sh` command. Open the Setup Wizard using the printed `http://<pi-hostname>.local:8090/?token=...` link.
+- **Raspberry Pi 3B or vanilla Raspberry Pi OS 64-bit:** Flash 64-bit Raspberry Pi OS with Imager (enable SSH + Wi-Fi in OS Customisation), then run the same one-line `setup.sh` command. Open the Setup Wizard using the printed `http://<pi-hostname>.local:8090/#token=...` link.
 - **Enable on-Pi OnStepX compilation** (installs SHA-256-verified `arduino-cli v1.6.0`; only needed if you edit `Config.h` directly on the Pi):
   ```bash
   curl -fsSL https://raw.githubusercontent.com/0denko/AstroDrive/main/setup.sh | sudo bash -s -- --with-arduino-cli

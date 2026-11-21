@@ -5,7 +5,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/0denko/AstroDrive/main/setup.sh | sudo bash
 #
 # What this does automatically:
-#   1. Installs required packages (python3, venv, git, curl, udev).
+#   1. Installs required packages if missing (python3, venv, git, curl, udev).
 #   2. Downloads (or updates) AstroDrive into /opt/astrodrive-src.
 #   3. Installs the OnStepX provisioner (safe AUTO_FLASH=false by default),
 #      authenticated Web Setup Wizard, daily self-updater, and Astroberry UI overlay.
@@ -31,9 +31,21 @@ echo "  AstroDrive Automatic Setup"
 echo "============================================================"
 echo ""
 
-echo "==> [1/4] Installing required system packages..."
-apt-get update -qq
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python3-venv python3-pip git curl udev
+# #15: Skip apt-get update/install if all required packages are already installed
+REQUIRED_PKGS=(python3 python3-venv python3-pip git curl udev)
+MISSING_PKGS=()
+for pkg in "${REQUIRED_PKGS[@]}"; do
+  if ! dpkg -s "${pkg}" >/dev/null 2>&1; then
+    MISSING_PKGS+=("${pkg}")
+  fi
+done
+if [ "${#MISSING_PKGS[@]}" -eq 0 ]; then
+  echo "==> [1/4] Required system packages already installed (skipping apt)."
+else
+  echo "==> [1/4] Installing missing system packages: ${MISSING_PKGS[*]}..."
+  apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${MISSING_PKGS[@]}"
+fi
 
 echo "==> [2/4] Downloading AstroDrive..."
 if [ -d "${SRC_DIR}/.git" ]; then
@@ -76,13 +88,13 @@ else
   echo "     click 'Download Firmware' on Step 1 of the Setup Wizard."
 fi
 echo ""
-echo "  Open the Setup Wizard in your browser (link includes your Setup PIN):"
+echo "  Open the Setup Wizard in your browser (uses #token fragment, never logged by Nginx):"
 if [ "${OVERLAY_ATTACHED}" = "attached" ]; then
-  echo "    -> http://astroberry.local/onstep/?token=${WEBUI_TOKEN}"
+  echo "    -> http://astroberry.local/onstep/#token=${WEBUI_TOKEN}"
 else
   echo "    (Astroberry Nginx overlay was not attached — use the direct URL below)"
 fi
-echo "    -> http://${HOST_NAME}.local:8090/?token=${WEBUI_TOKEN}"
+echo "    -> http://${HOST_NAME}.local:8090/#token=${WEBUI_TOKEN}"
 echo ""
 echo "  Your Setup PIN (if asked): ${WEBUI_TOKEN}"
 echo "  (Saved in /etc/onstep-autoprovision/webui.token)"

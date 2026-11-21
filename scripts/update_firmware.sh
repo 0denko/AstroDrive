@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Fetches the latest OnStepX firmware (.bin + manifest.json) from GitHub Releases
-# and verifies the .bin SHA-256 against the release manifest before installing into cache.
+# Fetches the latest OnStepX firmware (.bin + manifest.json) directly from GitHub
+# Release download URLs (no GitHub API calls or 60/hr rate limit) and checks the
+# .bin SHA-256 against the release manifest before installing into local cache.
 #
 # Usage:
 #   ./scripts/update_firmware.sh --repo 0denko/AstroDrive --profile nodemcu-esp32-tmc2208s
@@ -12,8 +13,10 @@ if [ -f /etc/onstep-autoprovision/config.env ]; then
   source /etc/onstep-autoprovision/config.env
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GITHUB_REPO="${GITHUB_REPO:-}"
 FIRMWARE_DIR="${FIRMWARE_DIR:-/opt/onstep-autoprovision/firmware}"
+PROFILES_DIR="${PROFILES_DIR:-}"
 PROFILE=""
 UPDATE_ALL="false"
 ALLOW_OFFLINE="false"
@@ -54,10 +57,11 @@ fi
 
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "${WORK_DIR}"' EXIT
-RELEASE_JSON="${WORK_DIR}/release.json"
 
-# Quick connectivity check (do not stall in the field when offline)
-if ! curl -fsSL --connect-timeout 5 --max-time 15 "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" -o "${RELEASE_JSON}" 2>/dev/null; then
+RELEASE_BASE="https://github.com/${GITHUB_REPO}/releases/latest/download"
+
+# Fast connectivity probe before attempting retries (prevents stalling offline in the field)
+if ! curl -fsSIL --connect-timeout 5 --max-time 10 "https://github.com/${GITHUB_REPO}/releases/latest" >/dev/null 2>&1; then
   if [ "${ALLOW_OFFLINE}" = "true" ]; then
     echo "[INFO] Offline or no GitHub Release reachable for ${GITHUB_REPO}; keeping existing local cache."
     exit 0
@@ -66,42 +70,47 @@ if ! curl -fsSL --connect-timeout 5 --max-time 15 "https://api.github.com/repos/
   exit 2
 fi
 
+# #14: Derive available profiles dynamically from installed firmware-src/profiles/
+discover_profiles() {
+  local search_dir=""
+  if [ -n "${PROFILES_DIR}" ] && [ -d "${PROFILES_DIR}" ]; then
+    search_dir="${PROFILES_DIR}"
+  elif [ -d "/opt/onstep-autoprovision/firmware-src/profiles" ]; then
+    search_dir="/opt/onstep-autoprovision/firmware-src/profiles"
+  elif [ -d "${SCRIPT_DIR}/../firmware/profiles" ]; then
+    search_dir="${SCRIPT_DIR}/../firmware/profiles"
+  fi
+
+  local found=0
+  if [ -n "${search_dir}" ]; then
+    for d in "${search_dir}"/*; do
+      if [ -f "${d}/profile.env" ]; then
+        basename "${d}"
+        found=1
+      fi
+    done
+  fi
+  if [ "${found}" -eq 0 ]; then
+    printf '%s\n' "nodemcu-esp32-tmc2208s" "nodemcu-esp8266-tmc2208s"
+  fi
+}
+
 fetch_profile_from_release() {
   local prof="$1"
   local manifest_asset="manifest-${prof}.json"
   local bin_asset="onstepx-${prof}.bin"
-
-  local manifest_url bin_url
-  manifest_url="$(python3 -c '
-import json, sys
-data = json.load(open(sys.argv[1], encoding="utf-8"))
-target = sys.argv[2]
-for a in data.get("assets", []):
-    if a.get("name") == target:
-        print(a.get("browser_download_url", ""))
-        break
-' "${RELEASE_JSON}" "${manifest_asset}")"
-
-  bin_url="$(python3 -c '
-import json, sys
-data = json.load(open(sys.argv[1], encoding="utf-8"))
-target = sys.argv[2]
-for a in data.get("assets", []):
-    if a.get("name") == target:
-        print(a.get("browser_download_url", ""))
-        break
-' "${RELEASE_JSON}" "${bin_asset}")"
-
-  if [ -z "${manifest_url}" ] || [ -z "${bin_url}" ]; then
-    echo "[ERROR] Release does not contain assets for profile '${prof}' (${bin_asset})." >&2
-    return 1
-  fi
+  local manifest_url="${RELEASE_BASE}/${manifest_asset}"
+  local bin_url="${RELEASE_BASE}/${bin_asset}"
 
   local tmp_dir="${WORK_DIR}/${prof}"
   mkdir -p "${tmp_dir}"
 
-  echo "==> Downloading ${manifest_asset} and ${bin_asset}..."
-  curl -fsSL --connect-timeout 10 --max-time 60 -o "${tmp_dir}/manifest.json" "${manifest_url}"
+  echo "==> Checking ${manifest_asset}..."
+  if ! curl -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-all-errors --retry-delay 5 \
+    -o "${tmp_dir}/manifest.json" "${manifest_url}"; then
+    echo "[ERROR] Failed to download ${manifest_url}" >&2
+    return 1
+  fi
 
   local dest_dir="${FIRMWARE_DIR}/${prof}"
   local new_sha cur_sha=""
@@ -119,7 +128,12 @@ for a in data.get("assets", []):
     return 0
   fi
 
-  curl -fsSL --connect-timeout 10 --max-time 120 -o "${tmp_dir}/${bin_asset}" "${bin_url}"
+  echo "==> Downloading ${bin_asset}..."
+  if ! curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors --retry-delay 5 \
+    -o "${tmp_dir}/${bin_asset}" "${bin_url}"; then
+    echo "[ERROR] Failed to download ${bin_url}" >&2
+    return 1
+  fi
 
   local actual_sha
   actual_sha="$(sha256sum "${tmp_dir}/${bin_asset}" | awk '{print $1}')"
@@ -136,11 +150,12 @@ for a in data.get("assets", []):
 
 if [ "${UPDATE_ALL}" = "true" ]; then
   FAILED=0
-  for p in nodemcu-esp32-tmc2208s nodemcu-esp8266-tmc2208s; do
+  while IFS= read -r p; do
+    [ -z "${p}" ] && continue
     if ! fetch_profile_from_release "${p}"; then
       FAILED=1
     fi
-  done
+  done < <(discover_profiles)
   if [ "${FAILED}" -ne 0 ]; then
     echo "[ERROR] One or more firmware profiles failed to download or failed SHA-256 check." >&2
     exit 1

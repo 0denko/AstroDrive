@@ -6,9 +6,11 @@ Runs on port 8090 (exposed inside Astroberry OS at http://astroberry.local/onste
 via Nginx overlay, and also accessible directly at http://<pi-ip>:8090/).
 
 Security model (M1):
-  - All mutating POST endpoints require a valid Setup PIN/token via the
-    `X-AstroDrive-Token` header (matched with hmac.compare_digest against
+  - All mutating POST routes, GET /api/logs, and GET /api/status?probe=1 require
+    a valid Setup PIN via `X-AstroDrive-Token` (hmac.compare_digest against
     /etc/onstep-autoprovision/webui.token).
+  - Unauthenticated GET /api/status returns only minimal boolean state for the
+    Astroberry overlay pill (no serials, paths, SSIDs, IPs, logs, or config).
   - `GITHUB_REPO` is read-only from the Web UI (cannot be repointed over HTTP).
   - Blank-board flashing requires explicit single-use authorization from the
     authenticated Setup Wizard unless the owner intentionally enabled AUTO_FLASH.
@@ -29,6 +31,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -39,6 +42,14 @@ WEBUI_DIR = Path(__file__).resolve().parent
 SCRIPTS_DIR = WEBUI_DIR.parent / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
+
+from onstep_common import (  # noqa: E402
+    find_device_holders,
+    get_udev_properties,
+    parse_env_file,
+    read_json_file,
+    write_config_keys,
+)
 
 LOG = logging.getLogger("onstep-webui")
 CONFIG_FILE = Path(os.environ.get("ONSTEP_CONFIG_FILE", "/etc/onstep-autoprovision/config.env"))
@@ -69,44 +80,32 @@ ALLOWED_CONFIG_KEYS = {
 }
 
 CONFIG_LOCK = threading.Lock()
+STATUS_CACHE_LOCK = threading.Lock()
+STATUS_CACHE_TTL_SEC = float(os.environ.get("WEBUI_STATUS_CACHE_TTL", "4.0"))
+_STATUS_CACHE: tuple[float, dict[str, Any]] | None = None
 _EPHEMERAL_TOKEN: str | None = None
 
 
-def get_expected_token() -> str:
+def invalidate_status_cache() -> None:
+    global _STATUS_CACHE
+    with STATUS_CACHE_LOCK:
+        _STATUS_CACHE = None
+
+
+def get_expected_token() -> tuple[str, bool]:
+    """Return (token, token_file_error). Fails closed on missing/short token file."""
     global _EPHEMERAL_TOKEN
     try:
         if TOKEN_FILE.is_file():
             tok = TOKEN_FILE.read_text(encoding="utf-8").strip()
             if len(tok) >= 16:
-                return tok
+                return tok, False
     except OSError:
         pass
     if _EPHEMERAL_TOKEN is None:
         _EPHEMERAL_TOKEN = secrets.token_hex(16)
-        LOG.warning("Token file %s not found; using ephemeral token for this session.", TOKEN_FILE)
-    return _EPHEMERAL_TOKEN
-
-
-def _parse_env_file(path: Path) -> dict[str, str]:
-    out: dict[str, str] = {}
-    if not path.is_file():
-        return out
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        out[k.strip()] = v.strip().strip('"').strip("'")
-    return out
-
-
-def _read_json_file(path: Path) -> dict[str, Any]:
-    try:
-        if path.is_file():
-            return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        pass
-    return {}
+        LOG.warning("Token file %s missing or invalid (<16 chars); failing closed with ephemeral token.", TOKEN_FILE)
+    return _EPHEMERAL_TOKEN, True
 
 
 def read_config_env() -> dict[str, str]:
@@ -123,32 +122,11 @@ def read_config_env() -> dict[str, str]:
         "ALLOWED_USB_SERIALS": "",
         "ALLOWED_USB_PATHS": "",
     }
-    parsed = _parse_env_file(CONFIG_FILE)
+    parsed = parse_env_file(CONFIG_FILE)
     for k in values:
         if k in parsed:
             values[k] = parsed[k]
     return values
-
-
-def _write_config_keys(clean: dict[str, str]) -> dict[str, str]:
-    with CONFIG_LOCK:
-        CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        lines = CONFIG_FILE.read_text(encoding="utf-8").splitlines() if CONFIG_FILE.is_file() else []
-        seen: set[str] = set()
-        out_lines: list[str] = []
-        for line in lines:
-            m = re.match(r"^\s*([A-Z0-9_]+)\s*=", line)
-            if m and m.group(1) in clean:
-                key = m.group(1)
-                out_lines.append(f'{key}="{clean[key]}"')
-                seen.add(key)
-            else:
-                out_lines.append(line)
-        for key, sval in clean.items():
-            if key not in seen:
-                out_lines.append(f'{key}="{sval}"')
-        CONFIG_FILE.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
-    return read_config_env()
 
 
 def update_config_env(updates: dict[str, str]) -> dict[str, str]:
@@ -160,28 +138,10 @@ def update_config_env(updates: dict[str, str]) -> dict[str, str]:
         if not ALLOWED_CONFIG_KEYS[key].match(sval):
             raise ValueError(f"Invalid value for {key}: {sval!r}")
         clean[key] = sval
-    return _write_config_keys(clean)
-
-
-def get_udev_properties(device: str) -> dict[str, str]:
-    props: dict[str, str] = {}
-    if not shutil.which("udevadm"):
-        return props
-    try:
-        res = subprocess.run(
-            ["udevadm", "info", "-q", "property", "-n", device],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=5,
-        )
-        for line in res.stdout.splitlines():
-            if "=" in line:
-                k, v = line.split("=", 1)
-                props[k.strip()] = v.strip()
-    except Exception:
-        pass
-    return props
+    with CONFIG_LOCK:
+        write_config_keys(CONFIG_FILE, clean)
+    invalidate_status_cache()
+    return read_config_env()
 
 
 def remember_usb_device(device: str) -> str:
@@ -191,18 +151,21 @@ def remember_usb_device(device: str) -> str:
     id_path = props.get("ID_PATH", "").strip()
     cfg = read_config_env()
 
-    # Prefer unique serial (CP2102/CH9102); fall back to physical USB port path (CH340)
     if serial_short and serial_short.lower() not in {"0001", "0000", "1234"}:
         cur = [x.strip() for x in cfg.get("ALLOWED_USB_SERIALS", "").split(",") if x.strip()]
         if serial_short not in cur:
             cur.append(serial_short)
-            _write_config_keys({"ALLOWED_USB_SERIALS": ",".join(cur)})
+            with CONFIG_LOCK:
+                write_config_keys(CONFIG_FILE, {"ALLOWED_USB_SERIALS": ",".join(cur)})
+            invalidate_status_cache()
         return f"USB serial {serial_short}"
     if id_path:
         cur = [x.strip() for x in cfg.get("ALLOWED_USB_PATHS", "").split(",") if x.strip()]
         if id_path not in cur:
             cur.append(id_path)
-            _write_config_keys({"ALLOWED_USB_PATHS": ",".join(cur)})
+            with CONFIG_LOCK:
+                write_config_keys(CONFIG_FILE, {"ALLOWED_USB_PATHS": ",".join(cur)})
+            invalidate_status_cache()
         return f"USB port {id_path}"
     return ""
 
@@ -274,32 +237,6 @@ def resolve_active_tty() -> tuple[str | None, bool]:
         return os.path.realpath(raw_links[0]), False
     ttys = sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*"))
     return (ttys[0], False) if ttys else (None, False)
-
-
-def find_device_holders(device: str) -> list[tuple[int, str]]:
-    """Return list of (pid, comm) holding an open FD to `device`."""
-    target = os.path.realpath(device)
-    my_pid = os.getpid()
-    holders: list[tuple[int, str]] = []
-    for entry in os.scandir("/proc"):
-        if not entry.name.isdigit():
-            continue
-        pid = int(entry.name)
-        if pid == my_pid:
-            continue
-        fd_dir = Path(entry.path) / "fd"
-        try:
-            for fd in fd_dir.iterdir():
-                try:
-                    if os.path.realpath(str(fd)) == target:
-                        comm = (Path(entry.path) / "comm").read_text(errors="replace").strip()
-                        holders.append((pid, comm))
-                        break
-                except OSError:
-                    continue
-        except OSError:
-            continue
-    return holders
 
 
 def probe_if_safe(device: str | None, bauds_csv: str) -> dict[str, Any]:
@@ -427,9 +364,9 @@ def read_network_status() -> dict[str, Any]:
     }
 
 
-def build_status(run_probe: bool = False) -> dict[str, Any]:
+def _build_full_status_uncached(run_probe: bool = False) -> dict[str, Any]:
     cfg = read_config_env()
-    meta = _parse_env_file(META_FILE)
+    meta = parse_env_file(META_FILE)
     tty, symlink_ready = resolve_active_tty()
     active_units = get_provisioning_units()
     holders = find_device_holders(tty) if tty and os.path.exists(tty) else []
@@ -449,30 +386,41 @@ def build_status(run_probe: bool = False) -> dict[str, Any]:
     else:
         probe_info = {"state": "disconnected"}
 
-    install_status = _read_json_file(STATE_DIR / "install-status.json")
-    overlay_status = _read_json_file(STATE_DIR / "overlay-status.json")
+    install_status = read_json_file(STATE_DIR / "install-status.json")
+    overlay_status = read_json_file(STATE_DIR / "overlay-status.json")
     if overlay_status:
         install_status["nginx_overlay"] = overlay_status.get("status", install_status.get("nginx_overlay", ""))
         install_status["nginx_overlay_detail"] = overlay_status.get("detail", "")
 
-    software_update = _read_json_file(STATE_DIR / "software-update.json")
+    software_update = read_json_file(STATE_DIR / "software-update.json")
     if meta:
         software_update.setdefault("installed_version", meta.get("INSTALLED_VERSION", ""))
         software_update.setdefault("installed_commit", meta.get("INSTALLED_COMMIT", ""))
 
+    _, token_err = get_expected_token()
+    unrestricted_auto_flash = (
+        cfg.get("AUTO_FLASH") == "true"
+        and not cfg.get("ALLOWED_USB_SERIALS", "").strip()
+        and not cfg.get("ALLOWED_USB_PATHS", "").strip()
+    )
+
     return {
         "auth_required": True,
+        "authenticated": True,
+        "token_file_error": token_err,
         "symlink_path": str(SYMLINK_PATH),
         "symlink_ready": symlink_ready,
         "device": tty,
+        "device_present": bool(tty),
         "usb_devices": list_usb_serial_devices(),
         "provisioning_active": bool(active_units),
         "provisioning_units": active_units,
-        "last_provision": _read_json_file(STATE_DIR / "provision-status.json"),
+        "last_provision": read_json_file(STATE_DIR / "provision-status.json"),
         "indi_active": indi_active,
         "holders": [{"pid": p, "comm": c} for p, c in holders],
         "probe": probe_info,
         "cached_profiles": list_cached_profiles(),
+        "auto_flash_unrestricted_warning": unrestricted_auto_flash,
         "config": {
             **{k: cfg[k] for k in ALLOWED_CONFIG_KEYS if k in cfg},
             "GITHUB_REPO": cfg.get("GITHUB_REPO", ""),
@@ -483,6 +431,35 @@ def build_status(run_probe: bool = False) -> dict[str, Any]:
         "network": read_network_status(),
         "install_status": install_status,
         "software_update": software_update,
+    }
+
+
+def build_status(run_probe: bool = False, authenticated: bool = True) -> dict[str, Any]:
+    """Return status with a short TTL cache (#1) and redacted payload when unauthenticated (M1 #1)."""
+    global _STATUS_CACHE
+    if run_probe:
+        full = _build_full_status_uncached(run_probe=True)
+    else:
+        now = time.monotonic()
+        with STATUS_CACHE_LOCK:
+            if _STATUS_CACHE and (now - _STATUS_CACHE[0]) < STATUS_CACHE_TTL_SEC:
+                full = _STATUS_CACHE[1]
+            else:
+                full = _build_full_status_uncached(run_probe=False)
+                _STATUS_CACHE = (now, full)
+
+    if authenticated:
+        return full
+
+    # M1 residual #1: Unauthenticated callers get ONLY minimal pill state (no serials/IPs/SSIDs/config)
+    return {
+        "auth_required": True,
+        "authenticated": False,
+        "token_file_error": full.get("token_file_error", False),
+        "symlink_ready": full.get("symlink_ready", False),
+        "device_present": full.get("device_present", False),
+        "provisioning_active": full.get("provisioning_active", False),
+        "indi_active": full.get("indi_active", False),
     }
 
 
@@ -521,9 +498,13 @@ def _clean_wifi_str(val: Any, max_len: int = 64) -> str:
 
 
 class OnStepWebUIHandler(BaseHTTPRequestHandler):
-    server_version = "OnStepOverlayWebUI/2.1"
+    server_version = "OnStepOverlayWebUI/2.2"
 
     def log_message(self, fmt: str, *args: Any) -> None:
+        # #1: Suppress noisy INFO logs on high-frequency read-only polling routes to reduce SD wear
+        path = urlparse(getattr(self, "path", "")).path
+        if path in {"/api/status", "/onstep/api/status", "/api/logs", "/onstep/api/logs"}:
+            return
         LOG.info("%s - %s", self.address_string(), fmt % args)
 
     def _normalized_path(self) -> tuple[str, dict[str, list[str]]]:
@@ -565,20 +546,26 @@ class OnStepWebUIHandler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length)
         return json.loads(raw.decode("utf-8"))
 
-    def _require_auth(self) -> bool:
+    def _is_authenticated(self) -> bool:
         provided = (self.headers.get("X-AstroDrive-Token") or "").strip()
-        expected = get_expected_token()
-        if not provided or not hmac.compare_digest(provided, expected):
-            self._send_json(
-                {
-                    "ok": False,
-                    "auth_error": True,
-                    "error": "Setup PIN required. Enter the PIN printed by setup.sh (or stored in /etc/onstep-autoprovision/webui.token).",
-                },
-                HTTPStatus.UNAUTHORIZED,
-            )
-            return False
-        return True
+        expected, _ = get_expected_token()
+        return bool(provided) and hmac.compare_digest(provided, expected)
+
+    def _require_auth(self) -> bool:
+        if self._is_authenticated():
+            return True
+        _, token_err = get_expected_token()
+        msg = (
+            "Setup token file (/etc/onstep-autoprovision/webui.token) is missing or invalid. "
+            "Re-run `sudo /opt/astrodrive-src/install.sh` on the Pi to regenerate it."
+            if token_err
+            else "Setup PIN required. Enter the PIN printed by setup.sh (or stored in /etc/onstep-autoprovision/webui.token)."
+        )
+        self._send_json(
+            {"ok": False, "auth_error": True, "token_file_error": token_err, "error": msg},
+            HTTPStatus.UNAUTHORIZED,
+        )
+        return False
 
     def do_GET(self) -> None:
         path, qs = self._normalized_path()
@@ -597,8 +584,12 @@ class OnStepWebUIHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
         elif path == "/api/status":
             do_probe = qs.get("probe", ["0"])[0] in {"1", "true"}
-            self._send_json(build_status(run_probe=do_probe))
+            if do_probe and not self._require_auth():
+                return
+            self._send_json(build_status(run_probe=do_probe, authenticated=self._is_authenticated()))
         elif path == "/api/logs":
+            if not self._require_auth():
+                return
             try:
                 lines = int(qs.get("lines", ["120"])[0])
             except ValueError:
@@ -633,7 +624,8 @@ class OnStepWebUIHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/action/probe":
-            self._send_json(build_status(run_probe=True))
+            invalidate_status_cache()
+            self._send_json(build_status(run_probe=True, authenticated=True))
             return
 
         if path == "/api/action/update-cache":
@@ -646,6 +638,7 @@ class OnStepWebUIHandler(BaseHTTPRequestHandler):
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
+                invalidate_status_cache()
                 self._send_json({"ok": True, "message": "Downloading latest firmware from GitHub Releases…"})
             except Exception as exc:
                 self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -661,6 +654,7 @@ class OnStepWebUIHandler(BaseHTTPRequestHandler):
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
+                invalidate_status_cache()
                 self._send_json({"ok": True, "message": "Checking GitHub for AstroDrive software updates…"})
             except Exception as exc:
                 self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -679,7 +673,6 @@ class OnStepWebUIHandler(BaseHTTPRequestHandler):
                     self._send_json({"ok": False, "error": "No ESP32 or NodeMCU USB board detected. Plug it in first."}, HTTPStatus.NOT_FOUND)
                     return
 
-            # M2: Refuse to start a doomed flash if zero firmware is cached and arduino-cli isn't installed
             profiles = list_cached_profiles()
             has_fw = any(p.get("binary_present") for p in profiles)
             if not has_fw and not shutil.which("arduino-cli"):
@@ -708,7 +701,6 @@ class OnStepWebUIHandler(BaseHTTPRequestHandler):
                 remembered = remember_usb_device(tty)
 
             dev_name = os.path.basename(tty)
-            # M3: Write a single-use authorization ticket for this exact device so AUTO_FLASH stays false globally
             if bool(body.get("authorize_flash", True)):
                 ticket_dir = STATE_DIR / "flash-once"
                 ticket_dir.mkdir(parents=True, exist_ok=True)
@@ -722,6 +714,7 @@ class OnStepWebUIHandler(BaseHTTPRequestHandler):
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
+                invalidate_status_cache()
                 note = f" (saved {remembered} to allowlist)" if remembered else ""
                 self._send_json({
                     "ok": True,
@@ -757,6 +750,7 @@ class OnStepWebUIHandler(BaseHTTPRequestHandler):
                     err_msg = (res.stderr or res.stdout or "Failed to configure Wi-Fi/Hotspot").strip()
                     self._send_json({"ok": False, "error": err_msg}, HTTPStatus.INTERNAL_SERVER_ERROR)
                     return
+                invalidate_status_cache()
                 msg = f"Saved! Field hotspot '{ap_ssid}' (10.42.0.1) is ready."
                 if home_ssid:
                     msg = f"Saved! Home Wi-Fi '{home_ssid}' + field hotspot '{ap_ssid}' (10.42.0.1) are ready."
@@ -779,6 +773,7 @@ class OnStepWebUIHandler(BaseHTTPRequestHandler):
                         HTTPStatus.INTERNAL_SERVER_ERROR,
                     )
                     return
+                invalidate_status_cache()
                 self._send_json({"ok": True, "message": "INDI LX200 OnStep defaults saved (/dev/onstep @ 9600 baud)."})
             except Exception as exc:
                 self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -797,6 +792,7 @@ class OnStepWebUIHandler(BaseHTTPRequestHandler):
                         HTTPStatus.INTERNAL_SERVER_ERROR,
                     )
                     return
+                invalidate_status_cache()
                 now_str = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
                 self._send_json({"ok": True, "message": f"Pi clock synced to {now_str}", "system_time_utc": now_str})
             except (ValueError, TypeError) as exc:

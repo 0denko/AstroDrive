@@ -38,6 +38,12 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from onstep_common import (
+    find_device_holders,
+    get_udev_properties,
+    read_json_file,
+    write_json_atomic,
+)
 from probe_onstep import probe_port
 
 LOG = logging.getLogger("onstep-autoprovision")
@@ -45,6 +51,8 @@ LOCK_PATH = Path("/run/lock/onstep-provision.lock")
 STATE_DIR = Path(os.environ.get("ONSTEP_STATE_DIR", "/var/lib/onstep-autoprovision"))
 STATUS_FILE = STATE_DIR / "provision-status.json"
 FLASH_ONCE_DIR = STATE_DIR / "flash-once"
+ONLINE_CHECK_STAMP = STATE_DIR / "last-online-check"
+ONLINE_CHECK_MIN_INTERVAL_SEC = int(os.environ.get("ONLINE_CHECK_MIN_INTERVAL_SEC", "21600"))  # 6 hours
 
 DEFAULT_CHIP_PROFILE_MAP = {
     "esp8266": "nodemcu-esp8266-tmc2208s",
@@ -54,7 +62,6 @@ DEFAULT_CHIP_PROFILE_MAP = {
 
 def write_provision_status(state: str, message: str, device: str = "", extra: Optional[dict[str, object]] = None) -> None:
     try:
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
         payload: dict[str, object] = {
             "state": state,
             "message": message,
@@ -63,9 +70,7 @@ def write_provision_status(state: str, message: str, device: str = "", extra: Op
         }
         if extra:
             payload.update(extra)
-        tmp = STATUS_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        os.replace(tmp, STATUS_FILE)
+        write_json_atomic(STATUS_FILE, payload)
     except OSError:
         pass
 
@@ -117,25 +122,6 @@ def has_internet(host: str = "github.com", port: int = 443, timeout: float = 3.0
         return False
 
 
-def get_udev_properties(device: str) -> dict[str, str]:
-    props: dict[str, str] = {}
-    try:
-        res = subprocess.run(
-            ["udevadm", "info", "-q", "property", "-n", device],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=10,
-        )
-        for line in res.stdout.splitlines():
-            if "=" in line:
-                k, v = line.split("=", 1)
-                props[k.strip()] = v.strip()
-    except Exception as exc:
-        LOG.warning("Failed to query udev properties for %s: %s", device, exc)
-    return props
-
-
 def check_usb_allowlist(device: str) -> bool:
     allowed_serials = env_list("ALLOWED_USB_SERIALS")
     allowed_paths = env_list("ALLOWED_USB_PATHS")
@@ -160,33 +146,6 @@ def check_usb_allowlist(device: str) -> bool:
         id_path,
     )
     return False
-
-
-def find_device_holders(device: str) -> list[tuple[int, str]]:
-    """Return list of (pid, comm) holding an open FD to `device`."""
-    target = os.path.realpath(device)
-    my_pid = os.getpid()
-    holders: list[tuple[int, str]] = []
-
-    for entry in os.scandir("/proc"):
-        if not entry.name.isdigit():
-            continue
-        pid = int(entry.name)
-        if pid == my_pid:
-            continue
-        fd_dir = Path(entry.path) / "fd"
-        try:
-            for fd in fd_dir.iterdir():
-                try:
-                    if os.path.realpath(str(fd)) == target:
-                        comm = (Path(entry.path) / "comm").read_text(errors="replace").strip()
-                        holders.append((pid, comm))
-                        break
-                except OSError:
-                    continue
-        except OSError:
-            continue
-    return holders
 
 
 def publish_symlink(device: str, symlink_path: str) -> None:
@@ -221,7 +180,20 @@ def notify_indi_connect(device_name: str) -> None:
 
 
 def probe_any_baud(device: str, bauds: list[int]) -> Optional[dict[str, str]]:
-    for baud in bauds:
+    # #13: Try last known-good baud first to avoid walking timeouts on common replugs
+    ordered: list[int] = []
+    last_status = read_json_file(STATUS_FILE)
+    try:
+        last_baud = int(str(last_status.get("baud", "")).strip())
+        if last_baud > 0:
+            ordered.append(last_baud)
+    except (ValueError, TypeError):
+        pass
+    for b in bauds:
+        if b not in ordered:
+            ordered.append(b)
+
+    for baud in ordered:
         try:
             info = probe_port(device, baud, timeout=1.5)
             if info:
@@ -301,11 +273,26 @@ def load_manifest(profile_dir: Path) -> tuple[Path, dict[str, str]]:
     return bin_path, manifest
 
 
-def try_online_release_fetch(profile: str, firmware_root: Path) -> bool:
+def try_online_release_fetch(profile: str, firmware_root: Path, force: bool = False) -> bool:
     updater = Path(os.environ.get("UPDATE_SCRIPT", "/opt/onstep-autoprovision/scripts/update_firmware.sh"))
     github_repo = os.environ.get("GITHUB_REPO", "").strip()
     if not github_repo or not updater.is_file():
         return False
+
+    # #6: Avoid redundant GitHub fetches on every USB plug event (throttle to 6 hours)
+    if not force and ONLINE_CHECK_STAMP.is_file():
+        try:
+            age = time.time() - ONLINE_CHECK_STAMP.stat().st_mtime
+            if 0 <= age < ONLINE_CHECK_MIN_INTERVAL_SEC:
+                LOG.info(
+                    "Skipping online release fetch (checked %.0f min ago; throttle=%d s).",
+                    age / 60.0,
+                    ONLINE_CHECK_MIN_INTERVAL_SEC,
+                )
+                return False
+        except OSError:
+            pass
+
     if not has_internet():
         LOG.info("Pi is offline; skipping GitHub Releases fetch.")
         return False
@@ -317,6 +304,11 @@ def try_online_release_fetch(profile: str, firmware_root: Path) -> bool:
         text=True,
         timeout=150,
     )
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        ONLINE_CHECK_STAMP.touch()
+    except OSError:
+        pass
     if res.returncode == 0:
         if res.stdout.strip():
             LOG.info("%s", res.stdout.strip())
@@ -337,7 +329,7 @@ def try_live_compile(profile: str, firmware_root: Path) -> bool:
         LOG.warning("Pi is offline; cannot pull latest OnStepX for live compilation.")
         return False
 
-    LOG.info("Pulling latest upstream OnStepX and compiling profile '%s' on Pi (this may take several minutes)...", profile)
+    LOG.info("Pulling pinned upstream OnStepX and compiling profile '%s' on Pi (this may take several minutes)...", profile)
     env = os.environ.copy()
     env.setdefault("ESPTOOL_PY", f"{sys.executable} -m esptool")
     res = subprocess.run(
@@ -365,6 +357,7 @@ def resolve_firmware_bundle(
     online_check: bool,
     auto_compile: bool,
     prefer_live_compile: bool,
+    force_online: bool = False,
 ) -> tuple[Optional[Path], Optional[dict[str, str]]]:
     profile_dir = firmware_root / profile
 
@@ -385,8 +378,10 @@ def resolve_firmware_bundle(
             if bp:
                 return bp, mf
 
+    # Check local cache first so we know whether online fetch is mandatory
+    bp_local, mf_local = try_local()
     if online_check:
-        try_online_release_fetch(profile, firmware_root)
+        try_online_release_fetch(profile, firmware_root, force=force_online or (bp_local is None))
 
     bp, mf = try_local()
     if bp:
@@ -579,6 +574,13 @@ def main() -> int:
             write_provision_status("awaiting_confirmation", msg, device)
             return 0
 
+        # M3 defence-in-depth: warn loudly if unattended AUTO_FLASH is armed with empty allowlists
+        if auto_flash and not flash_once_authorized and not env_list("ALLOWED_USB_SERIALS") and not env_list("ALLOWED_USB_PATHS"):
+            LOG.warning(
+                "SAFETY WARNING: AUTO_FLASH=true with empty ALLOWED_USB_SERIALS/ALLOWED_USB_PATHS — "
+                "any CP2102/CH340/CH9102 board plugged into this Pi will be flashed! Populate an allowlist or set AUTO_FLASH=false."
+            )
+
         # Identify the attached Espressif MCU silicon (ESP8266 vs ESP32)
         detected_chip = detect_esp_chip(device, expected_chip=target_chip_cfg)
         if not detected_chip:
@@ -608,6 +610,7 @@ def main() -> int:
             online_check=online_check,
             auto_compile=auto_compile,
             prefer_live_compile=prefer_live_compile,
+            force_online=flash_once_authorized or auto_upgrade,
         )
         if not bin_path or not manifest:
             msg = (

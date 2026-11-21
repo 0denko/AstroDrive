@@ -114,10 +114,17 @@ build_profile() {
   echo "==> Building profile: ${PROFILE_NAME} (${TARGET_CHIP}, ${CORE_SPEC})"
   echo "================================================================="
 
-  arduino-cli config init --overwrite >/dev/null 2>&1 || true
-  arduino-cli config add board_manager.additional_urls "${CORE_INDEX_URL}" >/dev/null
-  arduino-cli core update-index
-  arduino-cli core install "${CORE_SPEC}"
+  local core_id core_ver
+  core_id="${CORE_SPEC%@*}"
+  core_ver="${CORE_SPEC#*@}"
+  if ! arduino-cli core list 2>/dev/null | awk '{print $1, $2}' | grep -Fxq "${core_id} ${core_ver}"; then
+    arduino-cli config init --overwrite >/dev/null 2>&1 || true
+    arduino-cli config add board_manager.additional_urls "${CORE_INDEX_URL}" >/dev/null
+    arduino-cli core update-index
+    arduino-cli core install "${CORE_SPEC}"
+  else
+    echo "==> Core ${CORE_SPEC} already installed (skipping update-index/install)."
+  fi
 
   # Reset upstream src/plugins cleanly so profiles never bleed plugins into each other
   git -C "${SRC_DIR}" checkout -- src/plugins/Plugins.config.h >/dev/null 2>&1 || true
@@ -191,6 +198,15 @@ build_profile() {
   fw_version="${ver_major}.${ver_minor}${ver_patch}"
   git_sha="$(git -C "${SRC_DIR}" rev-parse --short HEAD)"
   build_utc="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  local source_fp
+  source_fp="$(
+    {
+      printf 'onstepx=%s\n' "$(git -C "${SRC_DIR}" rev-parse HEAD)"
+      find "${prof_dir}" -type f | LC_ALL=C sort | while IFS= read -r f; do
+        sha256sum "${f}" | awk -v rel="${f#"${prof_dir}/"}" '{print $1, rel}'
+      done
+    } | sha256sum | awk '{print $1}'
+  )"
 
   cat > "${out_dir}/manifest.json" <<EOF
 {
@@ -202,6 +218,7 @@ build_profile() {
   "flash_mode": "${FLASH_MODE}",
   "firmware_version": "${fw_version}",
   "onstepx_commit": "${git_sha}",
+  "source_fingerprint": "${source_fp}",
   "arduino_core": "${CORE_SPEC}",
   "sha256": "${sha256}",
   "built_at_utc": "${build_utc}"

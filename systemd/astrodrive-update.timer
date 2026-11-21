@@ -4,6 +4,7 @@ Description=Daily check for AstroDrive software updates
 [Timer]
 OnBootSec=5min
 OnUnitActiveSec=24h
+RandomizedDelaySec=1h
 Persistent=true
 
 [Install]

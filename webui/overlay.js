@@ -142,6 +142,7 @@
     drawer.querySelector('#onstep-overlay-close').addEventListener('click', closeDrawer);
 
     async function pollStatus() {
+      if (document.hidden) return;
       const dot = document.getElementById('onstep-overlay-dot');
       const label = document.getElementById('onstep-overlay-label');
       if (!dot || !label) return;
@@ -159,7 +160,7 @@
         } else if (s.symlink_ready) {
           dot.classList.add('ok');
           label.textContent = 'AstroDrive • Ready';
-        } else if (s.device) {
+        } else if (s.device_present || s.device) {
           dot.classList.add('warn');
           label.textContent = 'AstroDrive • Board Detected';
         } else {
@@ -173,7 +174,8 @@
     }
 
     pollStatus();
-    setInterval(pollStatus, 5000);
+    setInterval(pollStatus, 10000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) pollStatus(); });
   }
 
   if (document.readyState === 'loading') {

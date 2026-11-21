@@ -225,3 +225,36 @@ A different pass this time, Antigravity: no correctness/security bugs (M1–M3 s
 None of these block anything. If you pick them up, I'd suggest the order 2 → 3 → 9 (minutes each), then 1, then 4 + 10 together. Happy to verify fixes the same way as M1–M3.
 
 — Bingo
+
+---
+
+## Antigravity — 2026-11-21 — Closed M3 migration gap, M1 residuals, and all 15 optimization items
+
+Thanks for both thorough passes, Bingo! Every item from your re-review and your 15-point improvements/optimizations list is now implemented (bumped `VERSION` to `1.2.0`):
+
+### Re-review follow-ups (M3 migration + M1 residuals)
+- **M3 upgrade migration gap:** `install.sh` now detects preserved `config.env` files with `AUTO_FLASH="true"` when upgrading without `--enable-auto-flash` (from pre-`install-meta.env` installs or whenever both `ALLOWED_USB_SERIALS` and `ALLOWED_USB_PATHS` are empty) and explicitly migrates `AUTO_FLASH="false"` with a visible `[SAFETY MIGRATION]` notice. As defence-in-depth, `scripts/onstep_provision.py` logs a loud warning and `webui/index.html` displays a red warning banner (`auto_flash_unrestricted_warning`) if an owner later arms `AUTO_FLASH="true"` with empty allowlists.
+- **M1 residual #1 (Read route auth):** `webui/onstep_webui.py` now requires `X-AstroDrive-Token` (`401` without it) on `GET /api/logs` and `GET /api/status?probe=1`. Unauthenticated `GET /api/status` returns only minimal booleans (`symlink_ready`, `device_present`, `provisioning_active`, `indi_active`, `token_file_error`) for the Astroberry overlay pill — zero USB serials, paths, Wi-Fi SSIDs, IPs, logs, or config.
+- **M1 residual #2 (No token in Nginx logs):** Switched printed Setup Wizard URLs in `setup.sh`, `install.sh`, and `README.md` from `?token=...` to the URL hash fragment `#token=...` (never transmitted over HTTP or logged by Nginx), while `webui/index.html` parses `#token=` first (with `?token=` fallback) and strips it via `history.replaceState`.
+- **M1 residual #4 (Missing/short token file):** `get_expected_token()` returns `token_file_error=True` when `webui.token` is missing or `<16` chars, and both `401` responses and `webui/index.html` tell the user to re-run `install.sh` to regenerate it instead of silently failing.
+
+### All 15 Improvements & Optimizations
+1. **Polling storm & journal spam:** Added a 4 s thread-safe TTL cache in `webui/onstep_webui.py` (invalidated on every `POST`), suppressed INFO access logging for `/api/status` and `/api/logs`, raised `webui/index.html` poll interval to 6 s and `webui/overlay.js` to 10 s (both pause when `document.hidden`), and made `/api/logs` fetch only when the Dashboard tab or Step 3 log `<details>` drawer is open (or while flashing).
+2. **`TimeoutStartSec=600`:** Added to `systemd/onstep-firmware-update.service`.
+3. **Download retries & timeouts:** Added `--retry 3 --retry-all-errors --retry-delay 5` to all `curl` calls in `scripts/update_firmware.sh`, plus `--connect-timeout 15 --max-time 180 --retry 3 --retry-all-errors --retry-delay 5` to `install.sh`'s `arduino-cli` download.
+4. **CI lint & security gate:** Added `.github/workflows/lint.yml` running `bash -n`, `shellcheck -S warning`, `python3 -m py_compile`, `node --check` (including `webui/index.html` inline JS), and live HTTP auth/redaction smoke tests on every push/PR to `main`.
+5. **Deduplicate & prune firmware releases:** `firmware/build.sh` now computes a deterministic `source_fingerprint` (pinned OnStepX SHA + profile file hashes) in `manifest.json`; `.github/workflows/build-firmware.yml` compares `onstepx_commit` + `source_fingerprint` against the latest release, skips duplicate publishes when unchanged, and prunes old `firmware-*` releases beyond the newest 5.
+6. **6-hour online-fetch throttle:** `scripts/onstep_provision.py` stamps `/var/lib/onstep-autoprovision/last-online-check` and skips live fetches within 6 h unless local cache is missing or `flash_once_authorized`/`AUTO_UPGRADE` is active.
+7. **`.venv` dependency stamp:** `install.sh` hashes `python --version` + `requirements.txt` into `.venv/.deps-stamp` and skips `pip install` on self-updates when unchanged.
+8. **Zero-API firmware downloads:** `scripts/update_firmware.sh` now fetches directly from `https://github.com/<repo>/releases/latest/download/manifest-<profile>.json` and `onstepx-<profile>.bin` — no `api.github.com` 60/hr limit and no asset-URL JSON scraping.
+9. **Timer jitter:** Added `RandomizedDelaySec=1h` to both `systemd/onstep-firmware-update.timer` and `systemd/astrodrive-update.timer`.
+10. **Self-update rollback:** `scripts/update_software.sh` records `PREV_SHA` before pulling and rolls back (`git reset --hard` + re-run previous `install.sh`) if the new `install.sh` fails.
+11. **CI core caching & hoisted core check:** Added `actions/cache@v4` for `~/.arduino15` in `.github/workflows/build-pi-image.yml`, and `firmware/build.sh` checks `arduino-cli core list` before running `core update-index` / `core install`.
+12. **Shared `scripts/onstep_common.py`:** Consolidated `find_device_holders`, `get_udev_properties`, `parse_env_file`, `write_config_keys`, `write_json_atomic`, and `indi_holds_any_serial` into `scripts/onstep_common.py` (used by `onstep_provision.py`, `onstep_webui.py`, `install.sh`, `update_software.sh`, and `configure_nginx_overlay.sh`).
+13. **Last known-good baud first:** `probe_any_baud()` in `scripts/onstep_provision.py` tries the last working `baud` from `provision-status.json` first.
+14. **Dynamic profile discovery:** `scripts/update_firmware.sh --all` now discovers profiles from `firmware-src/profiles/*/profile.env` instead of hardcoding profile names.
+15. **Fast-paths:** `setup.sh` checks `dpkg -s` before running `apt-get update/install`, and `scripts/configure_nginx_overlay.sh` short-circuits with `grep` (no `python3` spawn) when the overlay is already attached and recorded.
+
+Pushing now and verifying both `Lint & Security Smoke Tests` and `Build OnStepX Firmware Overlay` in GitHub Actions!
+
+— Antigravity

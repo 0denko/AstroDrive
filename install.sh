@@ -54,31 +54,14 @@ META_FILE="${CONFIG_DIR}/install-meta.env"
 TOKEN_FILE="${CONFIG_DIR}/webui.token"
 STATE_DIR="/var/lib/onstep-autoprovision"
 ARDUINO_CACHE="/var/cache/onstep-arduino"
+COMMON_PY="${INSTALL_DIR}/scripts/onstep_common.py"
 
-# Helper (m1): update KEY="VALUE" if present, or append if missing
+# Helper (m1 / #12): update KEY="VALUE" if present, or append if missing, via shared onstep_common.py
 set_config_key() {
-  local key="$1"
-  local val="$2"
-  python3 - "${CONFIG_FILE}" "${key}" "${val}" <<'PY'
-import pathlib, re, sys
-p = pathlib.Path(sys.argv[1])
-key, val = sys.argv[2], sys.argv[3]
-lines = p.read_text(encoding="utf-8").splitlines() if p.is_file() else []
-out, found = [], False
-pat = re.compile(rf"^\s*{re.escape(key)}\s*=")
-for line in lines:
-    if pat.match(line):
-        out.append(f'{key}="{val}"')
-        found = True
-    else:
-        out.append(line)
-if not found:
-    out.append(f'{key}="{val}"')
-p.write_text("\n".join(out) + "\n", encoding="utf-8")
-PY
+  python3 "${COMMON_PY}" set-config "${CONFIG_FILE}" "$1" "$2"
 }
 
-# Helper (m7): install pinned arduino-cli v1.6.0 with verified SHA-256 checksum
+# Helper (m7 / #3): install pinned arduino-cli v1.6.0 with verified SHA-256 + timeouts & retries
 install_pinned_arduino_cli() {
   local version="1.6.0"
   local arch asset expected_sha
@@ -107,7 +90,8 @@ install_pinned_arduino_cli() {
   trap 'rm -rf "${tmp_dir}"' RETURN
   local url="https://github.com/arduino/arduino-cli/releases/download/v${version}/${asset}"
   echo "==> Downloading arduino-cli v${version} (${asset})..."
-  curl -fsSL -o "${tmp_dir}/${asset}" "${url}"
+  curl -fsSL --connect-timeout 15 --max-time 180 --retry 3 --retry-all-errors --retry-delay 5 \
+    -o "${tmp_dir}/${asset}" "${url}"
 
   local actual_sha
   actual_sha="$(sha256sum "${tmp_dir}/${asset}" | awk '{print $1}')"
@@ -134,6 +118,7 @@ mkdir -p \
 chmod 0755 "${STATE_DIR}"
 chmod 0700 "${STATE_DIR}/flash-once"
 
+install -m 0644 "${REPO_DIR}/scripts/onstep_common.py" "${INSTALL_DIR}/scripts/onstep_common.py"
 install -m 0755 "${REPO_DIR}/scripts/onstep_provision.py" "${INSTALL_DIR}/scripts/onstep_provision.py"
 install -m 0755 "${REPO_DIR}/scripts/probe_onstep.py" "${INSTALL_DIR}/scripts/probe_onstep.py"
 install -m 0755 "${REPO_DIR}/scripts/update_firmware.sh" "${INSTALL_DIR}/scripts/update_firmware.sh"
@@ -173,19 +158,28 @@ if [ -d "${REPO_DIR}/firmware/prebuilt" ]; then
   done
 fi
 
-# m2: Validate existing venv health before reusing (recreate if stale after Python upgrade)
+# m2 + #7: Validate venv health and skip pip install when requirements.txt + Python version are unchanged
 echo "==> Setting up Python virtual environment (${INSTALL_DIR}/.venv)..."
-if [ -d "${INSTALL_DIR}/.venv" ]; then
-  if ! "${INSTALL_DIR}/.venv/bin/python" -c "import sys, pip" >/dev/null 2>&1; then
+VENV_DIR="${INSTALL_DIR}/.venv"
+VENV_STAMP_FILE="${VENV_DIR}/.deps-stamp"
+if [ -d "${VENV_DIR}" ]; then
+  if ! "${VENV_DIR}/bin/python" -c "import sys, pip" >/dev/null 2>&1; then
     echo "==> Existing Python venv is stale or broken; recreating..."
-    rm -rf "${INSTALL_DIR}/.venv"
+    rm -rf "${VENV_DIR}"
   fi
 fi
-if [ ! -d "${INSTALL_DIR}/.venv" ]; then
-  python3 -m venv "${INSTALL_DIR}/.venv"
+if [ ! -d "${VENV_DIR}" ]; then
+  python3 -m venv "${VENV_DIR}"
 fi
-"${INSTALL_DIR}/.venv/bin/pip" install --upgrade pip >/dev/null
-"${INSTALL_DIR}/.venv/bin/pip" install -r "${INSTALL_DIR}/requirements.txt"
+DESIRED_STAMP="$(printf '%s\n' "$("${VENV_DIR}/bin/python" --version 2>&1)" "$(sha256sum "${INSTALL_DIR}/requirements.txt" | awk '{print $1}')" | sha256sum | awk '{print $1}')"
+CURRENT_STAMP="$(cat "${VENV_STAMP_FILE}" 2>/dev/null || true)"
+if [ "${DESIRED_STAMP}" = "${CURRENT_STAMP}" ]; then
+  echo "==> Python dependencies already up to date (skipping pip install)."
+else
+  "${VENV_DIR}/bin/pip" install --upgrade pip >/dev/null
+  "${VENV_DIR}/bin/pip" install -r "${INSTALL_DIR}/requirements.txt"
+  printf '%s\n' "${DESIRED_STAMP}" > "${VENV_STAMP_FILE}"
+fi
 
 if [ "${WITH_ARDUINO_CLI}" = "true" ]; then
   echo "==> Installing pinned arduino-cli and ESP8266/ESP32 cores for on-Pi compilation..."
@@ -204,16 +198,36 @@ if [ "${WITH_ARDUINO_CLI}" = "true" ]; then
   arduino-cli core install esp32:esp32@2.0.17
 fi
 
+EXISTING_CONFIG="false"
+PRE_META_UPGRADE="false"
 if [ ! -f "${CONFIG_FILE}" ]; then
   echo "==> Creating default configuration at ${CONFIG_FILE}..."
   install -m 0644 "${REPO_DIR}/config/onstep-autoprovision.env.example" "${CONFIG_FILE}"
 else
+  EXISTING_CONFIG="true"
+  if [ ! -f "${META_FILE}" ]; then
+    PRE_META_UPGRADE="true"
+  fi
   echo "==> Preserving existing configuration at ${CONFIG_FILE}."
 fi
 
 if [ "${ENABLE_AUTO_FLASH}" = "true" ]; then
   set_config_key "AUTO_FLASH" "true"
+elif [ "${EXISTING_CONFIG}" = "true" ]; then
+  # M3 migration fix: older setup.sh installs silently armed AUTO_FLASH="true" with empty allowlists.
+  # Disarm unattended AUTO_FLASH during upgrade from pre-meta installs (or warn loudly if still armed with empty allowlists).
+  CUR_AUTO_FLASH="$(grep -E '^\s*AUTO_FLASH\s*=' "${CONFIG_FILE}" | tail -n 1 | cut -d= -f2- | tr -d '\"'\'' ' || true)"
+  CUR_SERIALS="$(grep -E '^\s*ALLOWED_USB_SERIALS\s*=' "${CONFIG_FILE}" | tail -n 1 | cut -d= -f2- | tr -d '\"'\'' ' || true)"
+  CUR_PATHS="$(grep -E '^\s*ALLOWED_USB_PATHS\s*=' "${CONFIG_FILE}" | tail -n 1 | cut -d= -f2- | tr -d '\"'\'' ' || true)"
+  if [ "${CUR_AUTO_FLASH}" = "true" ]; then
+    if [ "${PRE_META_UPGRADE}" = "true" ] || { [ -z "${CUR_SERIALS}" ] && [ -z "${CUR_PATHS}" ]; }; then
+      echo "==> [SAFETY MIGRATION] Disabling unattended AUTO_FLASH=\"true\" in preserved ${CONFIG_FILE} (no USB allowlist set)."
+      echo "    Use Setup Wizard Step 3 for safe 1-click flashing, or pass --enable-auto-flash explicitly."
+      set_config_key "AUTO_FLASH" "false"
+    fi
+  fi
 fi
+
 if [ "${WITH_ARDUINO_CLI}" = "true" ]; then
   set_config_key "AUTO_COMPILE" "true"
 fi
@@ -230,7 +244,7 @@ if [ ! -f "${TOKEN_FILE}" ]; then
 fi
 
 # Persist install metadata & flags so daily self-updates reproduce the exact install options
-INSTALLED_VERSION="$(tr -d '[:space:]' < "${REPO_DIR}/VERSION" 2>/dev/null || echo "1.1.0")"
+INSTALLED_VERSION="$(tr -d '[:space:]' < "${REPO_DIR}/VERSION" 2>/dev/null || echo "1.2.0")"
 INSTALLED_COMMIT="$(git -C "${REPO_DIR}" rev-parse HEAD 2>/dev/null || echo "")"
 cat > "${META_FILE}" <<EOF
 INSTALLED_VERSION="${INSTALLED_VERSION}"
@@ -286,15 +300,19 @@ if ! "${INSTALL_DIR}/scripts/configure_indi_defaults.sh"; then
   echo "[WARNING] Could not pre-configure INDI defaults automatically. You can apply them in Setup Wizard Step 1." >&2
 fi
 
-python3 - "${STATE_DIR}/install-status.json" "${OVERLAY_RESULT}" "${INDI_RESULT}" "${INSTALLED_VERSION}" "${INSTALLED_COMMIT}" <<'PY' 2>/dev/null || true
-import datetime as dt, json, pathlib, sys
-pathlib.Path(sys.argv[1]).write_text(json.dumps({
-    "nginx_overlay": sys.argv[2],
-    "indi_defaults": sys.argv[3],
-    "installed_version": sys.argv[4],
-    "installed_commit": sys.argv[5],
-    "installed_at_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-}, indent=2) + "\n", encoding="utf-8")
+NOW_UTC="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+python3 - "${COMMON_PY}" "${STATE_DIR}/install-status.json" "${OVERLAY_RESULT}" "${INDI_RESULT}" "${INSTALLED_VERSION}" "${INSTALLED_COMMIT}" "${NOW_UTC}" <<'PY' 2>/dev/null || true
+import importlib.util, pathlib, sys
+spec = importlib.util.spec_from_file_location("onstep_common", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+mod.write_json_atomic(pathlib.Path(sys.argv[2]), {
+    "nginx_overlay": sys.argv[3],
+    "indi_defaults": sys.argv[4],
+    "installed_version": sys.argv[5],
+    "installed_commit": sys.argv[6],
+    "installed_at_utc": sys.argv[7],
+})
 PY
 
 if [ "${CHROOT_MODE}" = "false" ]; then
@@ -324,7 +342,7 @@ WEBUI_TOKEN="$(tr -d '[:space:]' < "${TOKEN_FILE}" 2>/dev/null || echo "")"
 echo ""
 echo "==> AstroDrive v${INSTALLED_VERSION} installed!"
 if [ "${OVERLAY_RESULT}" = "attached" ]; then
-  echo "  Setup Wizard: http://astroberry.local/onstep/?token=${WEBUI_TOKEN}"
+  echo "  Setup Wizard: http://astroberry.local/onstep/#token=${WEBUI_TOKEN}"
 fi
-echo "  Direct URL:   http://$(hostname).local:8090/?token=${WEBUI_TOKEN}"
-echo "  Setup Token:  ${WEBUI_TOKEN}  (stored in ${TOKEN_FILE})"
+echo "  Direct URL:   http://$(hostname).local:8090/#token=${WEBUI_TOKEN}"
+echo "  Setup PIN:    ${WEBUI_TOKEN}  (stored in ${TOKEN_FILE})"

@@ -10,23 +10,35 @@ SNIPPET_PATH="/etc/nginx/snippets/onstep-astroberry-overlay.conf"
 INCLUDE_LINE="    include ${SNIPPET_PATH};"
 STATE_DIR="/var/lib/onstep-autoprovision"
 STATE_FILE="${STATE_DIR}/overlay-status.json"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMMON_PY="${SCRIPT_DIR}/onstep_common.py"
 
 write_status() {
   local status="$1"
   local detail="$2"
+  local now_utc
+  now_utc="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   mkdir -p "${STATE_DIR}" 2>/dev/null || true
-  python3 - "${STATE_FILE}" "${status}" "${detail}" <<'PY' 2>/dev/null || true
-import datetime as dt, json, pathlib, sys
-p = pathlib.Path(sys.argv[1])
-p.write_text(json.dumps({
-    "status": sys.argv[2],
-    "detail": sys.argv[3],
-    "updated_at_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-}, indent=2) + "\n", encoding="utf-8")
+  if [ -f "${COMMON_PY}" ]; then
+    python3 - "${COMMON_PY}" "${STATE_FILE}" "${status}" "${detail}" "${now_utc}" <<'PY' 2>/dev/null || true
+import importlib.util, pathlib, sys
+spec = importlib.util.spec_from_file_location("onstep_common", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+mod.write_json_atomic(pathlib.Path(sys.argv[2]), {
+    "status": sys.argv[3],
+    "detail": sys.argv[4],
+    "updated_at_utc": sys.argv[5],
+})
 PY
+  fi
 }
 
 if ! command -v nginx >/dev/null 2>&1; then
+  # Fast-path when already recorded as not_installed (avoids spawning python3 on every apt run)
+  if [ -f "${STATE_FILE}" ] && grep -q '"not_installed"' "${STATE_FILE}" 2>/dev/null; then
+    exit 0
+  fi
   echo "[INFO] Nginx is not installed; AstroDrive Web UI runs standalone on port 8090."
   write_status "not_installed" "Nginx not installed; use port 8090."
   exit 0
@@ -57,7 +69,11 @@ if [ -z "${TARGET_CONF}" ]; then
   exit 2
 fi
 
+# #15: Grep fast-path — when already attached and status JSON already reflects it, skip python3!
 if grep -qF "${SNIPPET_PATH}" "${TARGET_CONF}"; then
+  if [ -f "${STATE_FILE}" ] && grep -q '"attached"' "${STATE_FILE}" 2>/dev/null; then
+    exit 0
+  fi
   echo "==> Astroberry Nginx overlay already attached to ${TARGET_CONF}."
   write_status "attached" "Attached to ${TARGET_CONF}"
   exit 0
