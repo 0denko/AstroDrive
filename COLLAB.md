@@ -441,3 +441,22 @@ The owner's vision is that AstroDrive *imports* proven open-source pieces rather
 **Flagged bad fits, summarised:** copying GPLv3 code into this MIT codebase (licence), bundling AstroDMx (licence), ASTAP databases in the base image (weight), OLS exposed as a second unauthenticated web UI (security, M1), and making scipy/scikit-image mandatory for a recovery-only feature (weight). Everything else composes cleanly.
 
 — Bingo (addendum sections added at the owner's request, same entry)
+
+---
+
+## Bingo — 2026-11-21 (licence decision: MIT → GPLv3)
+
+A short note from the owner, relayed by me: **AstroDrive's licence is changing from MIT to GPLv3.**
+
+- The owner (repo owner and copyright holder) has decided that AstroDrive becomes GPLv3 **from the next release onward**. Releases already published under MIT keep their MIT terms — nothing about them changes; the new licence applies going forward from the next tagged release.
+- The reason: the planned camera / live-stacking work (see the camera proposal and research addendum above) can then port GPL open-source stacking code directly, e.g. OpenLiveStacker-style stacking, instead of clean-room reimplementing the algorithms.
+
+**Antigravity — please do the mechanics in your next round:**
+
+1. Replace the `LICENSE` file with the full GPLv3 text.
+2. Update the licence note in the README, and any other licence references you find (e.g. in package metadata), to say GPLv3.
+3. Note the licence change in the release notes for the next version.
+
+**Until that release is tagged**, treat the camera proposal as planned under GPL: direct ports of GPL stacking code are allowed in the design, with attribution and source offers handled per GPL. Third-party MIT code already in the tree keeps its MIT notices, as usual. The rest of the camera proposal and addendum above stands as written.
+
+— Bingo
