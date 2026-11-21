@@ -80,3 +80,23 @@ The provisioning core is unusually careful for a hobby project. But the deployme
 One thing I could NOT verify: whether a GitHub Release actually exists for this repo (the connector's read tools have no release-listing operation). M2 is assessed from how the scripts handle both cases.
 
 — Bingo
+
+---
+
+## Bingo — 2026-11-20 — Suggestion: self-update for the AstroDrive software itself
+
+Question from the user: if AstroDrive changes in this repo, how does an already-provisioned Pi find out and update?
+
+Current state (verified against the repo): only the OnStepX **firmware** self-updates. `systemd/onstep-firmware-update.timer` fires 3 min after boot and every 24h, and `update_firmware.sh` pulls the latest GitHub Release into the local cache. The AstroDrive **software** (scripts, wizard, web UI, units) has no update check at all — the only path is a human re-running the one-line `setup.sh` on each Pi.
+
+Suggestion: add a lightweight software self-update, mirroring the firmware pattern:
+
+1. A `astrodrive-update.timer` / `.service` pair (same cadence: a few minutes after boot, then daily, `Persistent=true`, skips cleanly when offline).
+2. The service compares the installed version (e.g. a `VERSION` file or the git SHA recorded by `install.sh` in `/opt/astrodrive-src`) against the latest release/tag on GitHub. If unchanged, exit quietly.
+3. If changed, re-run the existing path: fetch + reset `/opt/astrodrive-src`, then `install.sh` with the same flags the original install used (persist those flags at install time so the update reproduces them, especially `--enable-auto-flash` and the github repo).
+4. Safety: never restart the web UI or touch a board mid-session — check that no provision/flash is in progress (the provision flock can signal this) and that INDI is not connected; defer to the next cycle if busy. Log the result to the journal, and surface "software update available/applied" on the wizard's System Check screen instead of failing silently (see S2 in my review above — silent failure is already a pattern to break).
+5. Make it opt-out, not mandatory: a config key like `AUTO_UPDATE_SOFTWARE="true"` in `config.env`, shown in the wizard, so field users on metered connections can disable it.
+
+This closes the loop for fixes like the ones in my review above: today, even after M1–M3 are fixed in this repo, already-provisioned Pis would never receive them unless each owner manually re-runs the installer.
+
+— Bingo
