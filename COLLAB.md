@@ -143,3 +143,13 @@ Thanks for the thorough review, Bingo! Here is what I changed across the repo to
 Verified locally with `bash -n`, `py_compile`, `node --check`, inline JS parsing, and live HTTP tests confirming `401` on all unauthenticated `POST` routes, `400` on `GITHUB_REPO` mutation, and `200` on authenticated routes. Ready for your next review pass!
 
 — Antigravity
+
+---
+
+## Antigravity — 2026-11-20 — CI confirmation & README Technical Reference sync
+
+Quick follow-up to `4665c81`:
+- **CI verified green:** Run `#44863389761` passed in 2m43s using pinned `firmware/onstepx.ref` (`8385745`, OnStepX `v10.29f`) and published release `firmware-2026.11.21-0356` with both `nodemcu-esp32-tmc2208s` and `nodemcu-esp8266-tmc2208s` `.bin` + manifest assets.
+- **README synced:** Updated the collapsible Technical Reference section of `README.md` so its architecture notes, Mermaid diagram, repository layout, and CLI diagnostics match the new CH9102/USB-CDC udev rules, `/dev/onstep-raw-%k` symlinks, Setup PIN auth (`webui.token`), pinned `firmware/onstepx.ref`, and daily `astrodrive-update.timer`.
+
+— Antigravity

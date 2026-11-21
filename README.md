@@ -122,21 +122,21 @@ All pin assignments in both firmware profiles match [`HARDWARE.md`](HARDWARE.md)
 <details>
 <summary><strong>How Auto-Provisioning Works (Architecture)</strong></summary>
 
-1. **`udev`** (`udev/99-onstep-nodemcu.rules`) detects CP2102 (`10c4:ea60`) or CH340 (`1a86:7523`) ESP32/NodeMCU boards, creates `/dev/onstep-raw`, blocks `ModemManager` (`ID_MM_DEVICE_IGNORE=1`), and triggers `onstep-autoprovision@ttyUSBx.service`.
-2. **`systemd` + Python** (`scripts/onstep_provision.py`) acquires an exclusive `flock`, verifies no active INDI session holds the port, probes LX200 `:GVP#` / `:GVN#` without DTR/RTS reset, detects blank boards via `esptool --chip auto chip_id`, fetches or compiles the matching OnStepX `.bin`, flashes & verifies it, and **atomically publishes `/dev/onstep`** for `indi_lx200_OnStep`.
-3. **Upgrade-safe Astroberry UI overlay:** Nginx proxies `/onstep/` to `onstep-webui.service` (`127.0.0.1:8090`) and injects `/onstep/overlay.js` via `sub_filter` with an APT post-invoke hook (`/etc/apt/apt.conf.d/99-onstep-nginx-overlay`).
+1. **`udev`** (`udev/99-onstep-nodemcu.rules`) detects CP2102 (`10c4:ea60`), CH340 (`1a86:7523`), CH9102 (`1a86:55d4`), and Espressif native USB-CDC (`303a:1001`) boards, creates per-device `/dev/onstep-raw-%k` symlinks, blocks `ModemManager` (`ID_MM_DEVICE_IGNORE=1`), and triggers `onstep-autoprovision@<dev>.service`.
+2. **`systemd` + Python** (`scripts/onstep_provision.py`) acquires an exclusive `flock`, verifies no active INDI session holds the port, probes LX200 `:GVP#` / `:GVN#` without DTR/RTS reset, and **atomically publishes `/dev/onstep`** for `indi_lx200_OnStep`. Blank boards are only flashed when explicitly authorized from the Setup Wizard (single-use ticket + USB allowlist recording) or when `AUTO_FLASH="true"` is intentionally enabled.
+3. **Authenticated Astroberry UI overlay & self-updates:** Nginx proxies `/onstep/` to `onstep-webui.service` (`127.0.0.1:8090`, hardened with `ProtectSystem=strict` and Setup PIN authentication via `/etc/onstep-autoprovision/webui.token` on all mutating routes) and injects `/onstep/overlay.js` via `sub_filter` with an APT post-invoke hook (`/etc/apt/apt.conf.d/99-onstep-nginx-overlay`). Daily timers (`onstep-firmware-update.timer` and `astrodrive-update.timer`, opt-out via `AUTO_UPDATE_SOFTWARE`) keep firmware cache and AstroDrive scripts current when online and idle.
 
 ```mermaid
 flowchart LR
     subgraph MCU["ESP32-WROOM or NodeMCU ESP8266"]
-        USB["CP2102 / CH340 USB"]
+        USB["CP2102 / CH340 /\nCH9102 / USB-CDC"]
         FW["OnStepX (PINMAP OFF)\nUART0 @ 9600 baud"]
         DRV["2× TMC2208S (1/16 StealthChop2)"]
         USB <--> FW --> DRV
     end
     subgraph RPI["Raspberry Pi (Astroberry OS v3.2+)"]
-        UDEV["udev (/dev/onstep-raw)"]
-        PROV["onstep_provision.py\n(auto chip detect + flash)"]
+        UDEV["udev (/dev/onstep-raw-%k)"]
+        PROV["onstep_provision.py\n(probe + authorized flash)"]
         LINK["/dev/onstep"]
         INDI["indi_lx200_OnStep @ 9600"]
         UI["AstroDrive Setup Wizard\nhttp://astroberry.local/onstep/"]
@@ -151,13 +151,13 @@ flowchart LR
 <details>
 <summary><strong>Alternative Installs (Raspberry Pi 3B, Vanilla RPi OS, On-Pi Compiler, Pre-baked CI Image)</strong></summary>
 
-- **Raspberry Pi 3B or vanilla Raspberry Pi OS 64-bit:** Flash 64-bit Raspberry Pi OS with Imager (enable SSH + Wi-Fi in OS Customisation), then run the same one-line `setup.sh` command. Open the Setup Wizard at `http://<pi-hostname>.local:8090/`.
-- **Enable on-Pi OnStepX compilation** (only needed if you edit `Config.h` directly on the Pi):
+- **Raspberry Pi 3B or vanilla Raspberry Pi OS 64-bit:** Flash 64-bit Raspberry Pi OS with Imager (enable SSH + Wi-Fi in OS Customisation), then run the same one-line `setup.sh` command. Open the Setup Wizard using the printed `http://<pi-hostname>.local:8090/?token=...` link.
+- **Enable on-Pi OnStepX compilation** (installs SHA-256-verified `arduino-cli v1.6.0`; only needed if you edit `Config.h` directly on the Pi):
   ```bash
   curl -fsSL https://raw.githubusercontent.com/0denko/AstroDrive/main/setup.sh | sudo bash -s -- --with-arduino-cli
   ```
 - **Pre-baked downloadable `.img.xz`:** Run **Actions → Build Raspberry Pi Overlay Image (.img.xz) → Run workflow** in GitHub Actions to generate a ready-to-flash `.img.xz` with AstroDrive + firmware baked in.
-- **Automated Firmware Builds:** `.github/workflows/build-firmware.yml` compiles both `nodemcu-esp32-tmc2208s` (`esp32:esp32@2.0.17`) and `nodemcu-esp8266-tmc2208s` (`esp8266:esp8266@3.1.2` + `esp8266RfOff` plugin) against upstream `hjd1964/OnStepX` and publishes `.bin` + SHA-256 manifests to [GitHub Releases](https://github.com/0denko/AstroDrive/releases/latest).
+- **Automated Firmware Builds:** `.github/workflows/build-firmware.yml` compiles both `nodemcu-esp32-tmc2208s` (`esp32:esp32@2.0.17`) and `nodemcu-esp8266-tmc2208s` (`esp8266:esp8266@3.1.2` + `esp8266RfOff` plugin) against the pinned OnStepX commit in `firmware/onstepx.ref` and publishes `.bin` + SHA-256 manifests to [GitHub Releases](https://github.com/0denko/AstroDrive/releases/latest).
 
 </details>
 
@@ -166,27 +166,32 @@ flowchart LR
 
 ```text
 AstroDrive/
+├── VERSION                                # AstroDrive software version (used by self-updater)
 ├── setup.sh                               # One-line curl | sudo bash bootstrap installer
 ├── install.sh                             # Idempotent RPi installer (--with-arduino-cli, --chroot)
 ├── HARDWARE.md                            # Full motor, power, Vref, and wire-by-wire guide
 ├── docs/                                  # ESP32 & NodeMCU ESP8266 SVG wiring schematics
 ├── .github/workflows/                     # Automated OnStepX firmware & Pi .img.xz builders
-├── webui/                                 # Setup Wizard + Dashboard + Astroberry overlay (:8090)
-├── scripts/                               # Auto-provisioner, INDI defaults, hotspot, firmware updater
-├── systemd/ udev/ nginx/ config/          # System services, udev rules, Nginx overlay, config template
-└── firmware/                              # Multi-profile OnStepX overlays (ESP32 + ESP8266 TMC2208S)
+├── webui/                                 # Token-authenticated Setup Wizard, Dashboard & Astroberry overlay (:8090)
+├── scripts/                               # Provisioner, INDI defaults, hotspot, firmware & software updaters
+├── systemd/ udev/ nginx/ config/          # Hardened units/timers, udev rules, Nginx overlay, config template
+└── firmware/                              # Pinned onstepx.ref + ESP32/ESP8266 TMC2208S OnStepX profiles
 ```
 
 ```bash
-# Watch live auto-flash logs
+# View your Setup Wizard PIN
+sudo cat /etc/onstep-autoprovision/webui.token
+
+# Watch live provisioning / flashing logs
 journalctl -fu 'onstep-autoprovision@*'
 
 # Non-resetting LX200 handshake check
 /opt/onstep-autoprovision/.venv/bin/python \
   /opt/onstep-autoprovision/scripts/probe_onstep.py --device /dev/onstep
 
-# Refresh cached firmware binaries from GitHub Releases
+# Refresh cached firmware binaries or check for AstroDrive software updates
 sudo /opt/onstep-autoprovision/scripts/update_firmware.sh --all
+sudo /opt/onstep-autoprovision/scripts/update_software.sh --force
 ```
 
 </details>
