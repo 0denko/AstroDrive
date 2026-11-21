@@ -46,7 +46,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.arduino15
-          key: arduino-cores-esp8266-2.7.4-esp32-2.0.17
+          key: arduino-cores-esp8266-3.1.2-esp32-2.0.17
 
       - name: Compile all OnStepX NodeMCU profiles (ESP8266 + ESP32)
         env:

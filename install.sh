@@ -3,7 +3,7 @@
 # and Astroberry OS v3.x (64-bit arm64).
 #
 # Flags:
-#   --with-arduino-cli   Install arduino-cli + pinned ESP8266 (2.7.4) & ESP32 (2.0.17) cores
+#   --with-arduino-cli   Install arduino-cli + pinned ESP8266 (3.1.2) & ESP32 (2.0.17) cores
 #                        so the Pi can pull latest OnStepX and live-compile on-device!
 #   --enable-auto-flash  Set AUTO_FLASH="true" in /etc/onstep-autoprovision/config.env
 #   --github-repo O/R    Pre-configure GITHUB_REPO="owner/repo" for online firmware fetches
@@ -107,7 +107,7 @@ if [ "${WITH_ARDUINO_CLI}" = "true" ]; then
     "https://arduino.esp8266.com/stable/package_esp8266com_index.json" \
     "https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json" >/dev/null
   arduino-cli core update-index
-  arduino-cli core install esp8266:esp8266@2.7.4
+  arduino-cli core install esp8266:esp8266@3.1.2
   arduino-cli core install esp32:esp32@2.0.17
 fi
 

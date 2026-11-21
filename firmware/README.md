@@ -48,7 +48,7 @@ Edit [`profiles/nodemcu-esp32-tmc2208s/Config.h`](profiles/nodemcu-esp32-tmc2208
 
 ## 2. Build with `arduino-cli` (Recommended)
 
-`build.sh` pins **ESP32 core `2.0.17`** and **ESP8266 core `2.7.4`** (OnStep's recommended stable cores), clones `hjd1964/OnStepX`, overlays the profile `Config.h`, `Extended.config.h`, and optional `plugins/`, compiles, and emits `.bin` + `manifest.json` under `firmware/prebuilt/<profile>/`:
+`build.sh` pins **ESP32 core `2.0.17`** and **ESP8266 core `3.1.2`** (required by OnStepX `10.29+` C++ initializers), clones `hjd1964/OnStepX`, overlays the profile `Config.h`, `Extended.config.h`, and optional `plugins/`, compiles, and emits `.bin` + `manifest.json` under `firmware/prebuilt/<profile>/`:
 
 ```bash
 chmod +x firmware/build.sh
