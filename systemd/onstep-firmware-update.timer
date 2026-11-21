@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily check for updated OnStepX firmware releases (skips cleanly when offline)
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=24h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

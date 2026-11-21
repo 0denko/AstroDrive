@@ -1,0 +1,19 @@
+[Unit]
+Description=OnStepX Auto-Provisioner Web UI & Astroberry Overlay API
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/onstep-autoprovision/config.env
+Environment=WEBUI_HOST=0.0.0.0
+Environment=WEBUI_PORT=8090
+ExecStart=/opt/onstep-autoprovision/.venv/bin/python /opt/onstep-autoprovision/webui/onstep_webui.py
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=onstep-webui
+SupplementaryGroups=dialout
+
+[Install]
+WantedBy=multi-user.target

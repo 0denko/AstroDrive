@@ -1,0 +1,91 @@
+name: Build OnStepX Firmware Overlay
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'firmware/**'
+      - '.github/workflows/build-firmware.yml'
+  schedule:
+    # Weekly compile-test against latest upstream hjd1964/OnStepX (Sundays 04:00 UTC)
+    - cron: '0 4 * * 0'
+  workflow_dispatch:
+    inputs:
+      onstepx_ref:
+        description: 'Upstream hjd1964/OnStepX git branch or tag'
+        required: false
+        default: 'main'
+      publish_release:
+        description: 'Publish compiled .bin + manifest assets to GitHub Releases'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python & esptool (for ESP32 binary merging)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install esptool
+        run: pip install -r requirements.txt
+
+      - name: Install arduino-cli
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Cache Arduino cores & downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.arduino15
+          key: arduino-cores-esp8266-2.7.4-esp32-2.0.17
+
+      - name: Compile all OnStepX NodeMCU profiles (ESP8266 + ESP32)
+        env:
+          ONSTEPX_REF: ${{ github.event.inputs.onstepx_ref || 'main' }}
+        run: |
+          chmod +x firmware/build.sh
+          ./firmware/build.sh --all
+
+      - name: Prepare flat release assets
+        run: |
+          mkdir -p release-assets
+          for prof_dir in firmware/prebuilt/*; do
+            if [ -f "${prof_dir}/manifest.json" ]; then
+              prof="$(basename "${prof_dir}")"
+              cp "${prof_dir}/onstepx-${prof}.bin" "release-assets/onstepx-${prof}.bin"
+              cp "${prof_dir}/manifest.json" "release-assets/manifest-${prof}.json"
+            fi
+          done
+          ls -lh release-assets
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: onstepx-firmware-prebuilt
+          path: firmware/prebuilt/
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: >-
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true') ||
+          github.event_name == 'schedule' ||
+          github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DATE_TAG="firmware-$(date -u +%Y.%m.%d-%H%M)"
+          ESP8266_VER="$(python3 -c 'import json; print(json.load(open("release-assets/manifest-nodemcu-esp8266-tmc2209s.json"))["firmware_version"])')"
+          ESP8266_SHA="$(python3 -c 'import json; print(json.load(open("release-assets/manifest-nodemcu-esp8266-tmc2209s.json"))["onstepx_commit"])')"
+          gh release create "${DATE_TAG}" release-assets/* \
+            --title "OnStepX v${ESP8266_VER} (${ESP8266_SHA}) — NodeMCU Overlay" \
+            --notes "Automated overlay build against upstream \`hjd1964/OnStepX\` commit \`${ESP8266_SHA}\`.\n\nIncluded profiles:\n- \`nodemcu-esp8266-tmc2209s\` (NodeMCU ESP8266 + 2× TMC2209S)\n- \`nodemcu-esp32-tmc2209s\` (NodeMCU-32S ESP32 + 2× TMC2209S)" \
+            --latest

@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh cached OnStepX firmware from GitHub Releases when online
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/onstep-autoprovision/config.env
+ExecStart=/opt/onstep-autoprovision/scripts/update_firmware.sh --all
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=onstep-firmware-update

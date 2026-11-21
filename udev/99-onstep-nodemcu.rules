@@ -1,0 +1,39 @@
+# /etc/udev/rules.d/99-onstep-nodemcu.rules
+#
+# Automated detection & readiness gating for NodeMCU ESP8266 OnStepX controllers.
+#
+# Architecture note:
+#   - Creates /dev/onstep-raw immediately, NEVER /dev/onstep directly.
+#   - Blocks ModemManager from probing the port with AT commands (ID_MM_DEVICE_IGNORE=1).
+#   - Triggers `onstep-autoprovision@%k.service` asynchronously via systemd (never runs
+#     esptool.py inside udev RUN+=, avoiding udev's ~30-60s timeout).
+#   - The systemd service verifies LX200 `:GVP# -> On-Step#` (flashing if needed) and
+#     atomically publishes /dev/onstep ONLY when the controller is ready for INDI.
+#
+# IMPORTANT SAFETY TIP:
+#   If you have other CP2102 or CH340 devices on the Pi (focusers, dew heaters, GPS),
+#   uncomment and set ATTRS{serial}=="..." (CP2102) or KERNELS=="1-1.2" (CH340 port)
+#   below, AND/OR populate ALLOWED_USB_SERIALS / ALLOWED_USB_PATHS in
+#   /etc/onstep-autoprovision/config.env.
+
+# NodeMCU v2 (Amica) - Silicon Labs CP2102 USB-to-UART Bridge
+ACTION=="add", SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", \
+  MODE="0660", GROUP="dialout", \
+  ENV{ID_MM_DEVICE_IGNORE}="1", \
+  ENV{ONSTEP_RAW}="1", \
+  SYMLINK+="onstep-raw", \
+  TAG+="systemd", \
+  ENV{SYSTEMD_WANTS}="onstep-autoprovision@%k.service"
+
+# NodeMCU v3 (LoLin / CH340G clones) - QinHeng CH340 USB-to-UART Bridge
+ACTION=="add", SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", \
+  MODE="0660", GROUP="dialout", \
+  ENV{ID_MM_DEVICE_IGNORE}="1", \
+  ENV{ONSTEP_RAW}="1", \
+  SYMLINK+="onstep-raw", \
+  TAG+="systemd", \
+  ENV{SYSTEMD_WANTS}="onstep-autoprovision@%k.service"
+
+# Clean up /dev/onstep symlink when the matched USB device is unplugged
+ACTION=="remove", SUBSYSTEM=="tty", ENV{ONSTEP_RAW}=="1", \
+  RUN+="/bin/sh -c '[ \"$(readlink -f /dev/onstep 2>/dev/null)\" = \"/dev/%k\" ] && rm -f /dev/onstep || true'"

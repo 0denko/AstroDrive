@@ -1,0 +1,215 @@
+name: Build Raspberry Pi Overlay Image (.img.xz)
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_image_url:
+        description: 'Direct URL to upstream 64-bit Pi .img.xz (Astroberry OS v3.x or Raspberry Pi OS 64-bit)'
+        required: true
+        default: 'https://downloads.raspberrypi.com/raspios_arm64/images/raspios_arm64-2025-10-02/2025-10-01-raspios-trixie-arm64.img.xz'
+      onstepx_ref:
+        description: 'Upstream hjd1964/OnStepX branch or tag to bake in'
+        required: false
+        default: 'main'
+      install_arduino_cli_in_image:
+        description: 'Bake arduino-cli + ESP8266/ESP32 cores into image for on-Pi live compilation'
+        required: false
+        type: boolean
+        default: true
+      enable_auto_flash:
+        description: 'Enable AUTO_FLASH=true out of the box in the image'
+        required: false
+        type: boolean
+        default: true
+      hotspot_ssid:
+        description: 'Optional default dark-sky hotspot SSID (leave blank to skip)'
+        required: false
+        default: 'AstroPi-OnStep'
+      hotspot_password:
+        description: 'Dark-sky hotspot WPA2 password (min 8 chars)'
+        required: false
+        default: 'clearSkies2026'
+
+permissions:
+  contents: write
+
+jobs:
+  build-firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - uses: arduino/setup-arduino-cli@v2
+      - name: Build latest OnStepX firmware for all NodeMCU profiles
+        env:
+          ONSTEPX_REF: ${{ github.event.inputs.onstepx_ref }}
+        run: |
+          chmod +x firmware/build.sh
+          ./firmware/build.sh --all
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prebuilt-firmware
+          path: firmware/prebuilt/
+          retention-days: 1
+
+  build-pi-image:
+    needs: build-firmware
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free disk space on GitHub runner
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download freshly compiled OnStepX firmware artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: prebuilt-firmware
+          path: firmware/prebuilt/
+
+      - name: Install ARM64 emulation and image manipulation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            qemu-user-static binfmt-support parted e2fsprogs xz-utils curl
+
+      - name: Download & decompress upstream Pi image
+        env:
+          BASE_IMAGE_URL: ${{ github.event.inputs.base_image_url }}
+        run: |
+          mkdir -p work
+          curl -fSL -o work/base.img.xz "${BASE_IMAGE_URL}"
+          xz -d -T0 work/base.img.xz
+          # Add 2.5 GB headroom for Python venv + arduino-cli + ESP8266/ESP32 cores
+          truncate -s +2560M work/base.img
+
+      - name: Mount image and apply astro-pi-onstep-autoprovision overlay inside ARM64 chroot
+        env:
+          INSTALL_ARDUINO_CLI: ${{ github.event.inputs.install_arduino_cli_in_image }}
+          ENABLE_AUTO_FLASH: ${{ github.event.inputs.enable_auto_flash }}
+          GITHUB_REPO: ${{ github.repository }}
+          HOTSPOT_SSID: ${{ github.event.inputs.hotspot_ssid }}
+          HOTSPOT_PASS: ${{ github.event.inputs.hotspot_password }}
+        run: |
+          set -euo pipefail
+          LOOP_DEV="$(sudo losetup -fP --show work/base.img)"
+          echo "LOOP_DEV=${LOOP_DEV}" >> "$GITHUB_ENV"
+
+          # Expand root partition (partition 2) to fill added headroom
+          sudo parted -s "${LOOP_DEV}" resizepart 2 100%
+          sudo e2fsck -fy "${LOOP_DEV}p2" || true
+          sudo resize2fs "${LOOP_DEV}p2"
+
+          sudo mkdir -p /mnt/pi
+          sudo mount "${LOOP_DEV}p2" /mnt/pi
+          if [ -e "${LOOP_DEV}p1" ]; then
+            sudo mkdir -p /mnt/pi/boot/firmware
+            sudo mount "${LOOP_DEV}p1" /mnt/pi/boot/firmware || sudo mount "${LOOP_DEV}p1" /mnt/pi/boot
+          fi
+
+          # Bind mounts & QEMU ARM64 static binary for chroot execution
+          sudo cp /usr/bin/qemu-aarch64-static /mnt/pi/usr/bin/
+          sudo mount --bind /dev /mnt/pi/dev
+          sudo mount --bind /dev/pts /mnt/pi/dev/pts
+          sudo mount --bind /proc /mnt/pi/proc
+          sudo mount --bind /sys /mnt/pi/sys
+          sudo cp /etc/resolv.conf /mnt/pi/etc/resolv.conf.ci
+          sudo mv /mnt/pi/etc/resolv.conf /mnt/pi/etc/resolv.conf.orig 2>/dev/null || true
+          sudo cp /mnt/pi/etc/resolv.conf.ci /mnt/pi/etc/resolv.conf
+
+          # Copy repo + prebuilt firmware into chroot staging dir
+          sudo mkdir -p /mnt/pi/tmp/onstep-overlay
+          sudo cp -a . /mnt/pi/tmp/onstep-overlay/
+
+          INSTALL_FLAGS="--chroot --github-repo ${GITHUB_REPO}"
+          if [ "${INSTALL_ARDUINO_CLI}" = "true" ]; then
+            INSTALL_FLAGS="${INSTALL_FLAGS} --with-arduino-cli"
+          fi
+          if [ "${ENABLE_AUTO_FLASH}" = "true" ]; then
+            INSTALL_FLAGS="${INSTALL_FLAGS} --enable-auto-flash"
+          fi
+
+          sudo chroot /mnt/pi /bin/bash -c "
+            set -euo pipefail
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-venv python3-pip git curl udev
+            cd /tmp/onstep-overlay
+            chmod +x install.sh
+            ./install.sh ${INSTALL_FLAGS}
+            apt-get clean
+            rm -rf /var/lib/apt/lists/* /tmp/onstep-overlay
+          "
+
+          # Optional: write a NetworkManager fallback dark-sky hotspot keyfile directly
+          if [ -n "${HOTSPOT_SSID}" ] && [ "${#HOTSPOT_PASS}" -ge 8 ]; then
+            sudo mkdir -p /mnt/pi/etc/NetworkManager/system-connections
+            UUID="$(cat /proc/sys/kernel/random/uuid)"
+            sudo tee /mnt/pi/etc/NetworkManager/system-connections/astropi-hotspot.nmconnection >/dev/null <<EOF
+          [connection]
+          id=astropi-hotspot
+          uuid=${UUID}
+          type=wifi
+          interface-name=wlan0
+          autoconnect=true
+          autoconnect-priority=10
+
+          [wifi]
+          band=bg
+          mode=ap
+          ssid=${HOTSPOT_SSID}
+
+          [wifi-security]
+          key-mgmt=wpa-psk
+          psk=${HOTSPOT_PASS}
+
+          [ipv4]
+          address1=10.42.0.1/24
+          method=shared
+
+          [ipv6]
+          method=ignore
+          EOF
+            sudo chmod 600 /mnt/pi/etc/NetworkManager/system-connections/astropi-hotspot.nmconnection
+          fi
+
+      - name: Unmount & clean up chroot
+        if: always()
+        run: |
+          if mountpoint -q /mnt/pi; then
+            sudo mv /mnt/pi/etc/resolv.conf.orig /mnt/pi/etc/resolv.conf 2>/dev/null || true
+            sudo rm -f /mnt/pi/etc/resolv.conf.ci /mnt/pi/usr/bin/qemu-aarch64-static
+            sudo umount -lf /mnt/pi/sys || true
+            sudo umount -lf /mnt/pi/proc || true
+            sudo umount -lf /mnt/pi/dev/pts || true
+            sudo umount -lf /mnt/pi/dev || true
+            sudo umount -lf /mnt/pi/boot/firmware || sudo umount -lf /mnt/pi/boot || true
+            sudo umount -lf /mnt/pi || true
+          fi
+          if [ -n "${LOOP_DEV:-}" ]; then
+            sudo losetup -d "${LOOP_DEV}" || true
+          fi
+
+      - name: Compress downloadable .img.xz and generate SHA-256
+        run: |
+          OUT_NAME="astrodrive-pi-$(date -u +%Y.%m.%d).img"
+          mv work/base.img "work/${OUT_NAME}"
+          xz -T0 -6 "work/${OUT_NAME}"
+          (cd work && sha256sum "${OUT_NAME}.xz" > "${OUT_NAME}.xz.sha256")
+          echo "OUT_IMG=work/${OUT_NAME}.xz" >> "$GITHUB_ENV"
+          echo "OUT_SHA=work/${OUT_NAME}.xz.sha256" >> "$GITHUB_ENV"
+          ls -lh work/
+
+      - name: Publish downloadable Pi image to GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          IMG_TAG="pi-image-$(date -u +%Y.%m.%d-%H%M)"
+          gh release create "${IMG_TAG}" "${OUT_IMG}" "${OUT_SHA}" \
+            --title "AstroDrive OnStepX Pi Image (${IMG_TAG})" \
+            --notes "Ready-to-flash 64-bit Raspberry Pi image with the **AstroDrive** OnStepX auto-provisioner and Astroberry Web UI overlay baked in.\n\n- Flash with **Raspberry Pi Imager** (optionally set your Home Wi-Fi & SSH key in Imager OS Customisation).\n- Auto-detects any plugged-in NodeMCU (ESP8266 or ESP32), fetches or live-compiles the matching OnStepX firmware, flashes it, and publishes \`/dev/onstep\` for \`indi_lx200_OnStep\`.\n- Access the built-in AstroDrive OnStepX drawer inside \`http://astroberry.local\` (or standalone on port \`8090\`).\n- Dark-sky hotspot fallback: SSID \`${{ github.event.inputs.hotspot_ssid }}\` (IP \`10.42.0.1\`)."

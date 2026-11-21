@@ -1,0 +1,13 @@
+{
+  "profile": "nodemcu-esp8266-tmc2209s",
+  "binary": "onstepx-nodemcu-esp8266-tmc2209s.bin",
+  "chip": "esp8266",
+  "fqbn": "esp8266:esp8266:nodemcuv2:xtal=160,eesz=4M2M,ip=lm2f",
+  "flash_offset": "0x00000",
+  "flash_mode": "dio",
+  "firmware_version": "10.28a",
+  "onstepx_commit": "replace-by-build-sh",
+  "arduino_core": "esp8266:esp8266@2.7.4",
+  "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "built_at_utc": "2026-11-20T00:00:00Z"
+}

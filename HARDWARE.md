@@ -1,24 +1,24 @@
 # Hardware
 
-The parts on hand and how they wire into the mount. Pin numbers here match the firmware
-constants in [esp32/firmware/src/main.cpp](esp32/firmware/src/main.cpp) and the mount defaults in
-[backend/api/app.py](backend/api/app.py); change one and change the others. For a wire-by-wire
-checklist see [Connection list](#connection-list).
+The parts on hand and how they wire into the mount. Pin numbers here match the OnStepX firmware
+profiles in [firmware/profiles/nodemcu-esp8266-tmc2209s/Config.h](firmware/profiles/nodemcu-esp8266-tmc2209s/Config.h)
+and [firmware/profiles/nodemcu-esp32-tmc2209s/Config.h](firmware/profiles/nodemcu-esp32-tmc2209s/Config.h);
+change one and change the others. For a wire-by-wire checklist see [Connection list](#connection-list).
 
 ## Inventory
 
 | Part | What it is | Role here |
 | --- | --- | --- |
-| ESP32-WROOM | 3.3 V MCU module | Motion controller, PlatformIO environment `esp32dev`. |
-| TMC2208 driver modules | Stepper drivers, step/dir interface | One per axis, RA and DEC. |
-| 36H20HM stepper | 0.9°, 0.5 A/phase, 12 Ω, 1100 g·cm | RA axis. |
+| Amica NodeMCU (ESP8266) | 3.3 V MCU board (CP2102) | Primary motion controller, OnStepX profile `nodemcu-esp8266-tmc2209s`. See [NodeMCU as the controller](#nodemcu-as-the-controller). |
+| ESP32-WROOM / NodeMCU-32S | 3.3 V MCU module | Drop-in upgrade controller, OnStepX profile `nodemcu-esp32-tmc2209s` (auto-detected by `esptool`). |
+| TMC2209 (or TMC2208) StepSticks | Ultra-silent stepper drivers, standalone Step/Dir (`TMC2209S`) | One per axis, RA and DEC (StealthChop2 + 256× MicroPlyer). |
+| 36H20HM stepper | 0.9°, 0.5 A/phase, 12 Ω, 1100 g·cm | RA axis (`2560.0` steps/deg at 1/16 & 144:1 worm). |
 | 36H18HM stepper | 36 mm frame (NEMA 14) hybrid, 18 mm body | DEC axis. Specs still unconfirmed. |
 | KP35FM2 stepper | 1.8°, 0.6 A/phase, 37 Ω, 700 g·cm | Focuser only, see [Rail voltage](#rail-voltage). |
 | LM2596S modules | Adjustable buck converters, non-isolated | Derive 5 V logic from the 12 V motor rail. |
 | Relay modules | Opto-isolated relay boards | Switching dew heater, camera, or the motor rail. |
-| Amica NodeMCU | ESP8266 board, 3.3 V | Alternative controller, environment `nodemcuv2`. See [NodeMCU as the controller](#nodemcu-as-the-controller). |
 
-Note the TMC2208 is a stepper driver, not a servo driver, despite how these modules are often
+Note the TMC2209/TMC2208 is a stepper driver, not a servo driver, despite how these modules are often
 listed. It has no position feedback; the mount is open loop.
 
 ### Motor specifications
@@ -232,7 +232,7 @@ turn.
 
 | From | To | Notes |
 | --- | --- | --- |
-| Raspberry Pi USB | Controller USB | Serial at 115200, and powers the board |
+| Raspberry Pi USB | Controller USB | OnStepX LX200 serial at `9600` baud (`/dev/onstep`), and powers the board |
 
 That USB cable carries the board's whole supply, so its quality is part of the circuit. A thin or
 long cable drops enough voltage to re-enumerate the port; see [Power](#power).
@@ -288,16 +288,16 @@ pull-downs, so leaving them floating gives 1/8 instead: with `steps_per_revoluti
 1/16, every step is then worth twice the angle the software thinks, and moves land at double the
 commanded angle.
 
-| MS1 | MS2 | Microstep |
-| --- | --- | --- |
-| GND | GND | 1/8 |
-| GND | VIO | 1/2 |
-| VIO | GND | 1/4 |
-| VIO | VIO | 1/16 |
+| MS1 | MS2 | TMC2209 Microstep | TMC2208 Microstep |
+| --- | --- | --- | --- |
+| GND | GND | 1/8 *(256× MicroPlyer)* | 1/8 |
+| GND | VIO | 1/64 *(256× MicroPlyer)* | 1/2 |
+| VIO | GND | 1/32 *(256× MicroPlyer)* | 1/4 |
+| VIO | VIO | **1/16** *(256× MicroPlyer)* | **1/16** |
 
-The 36H motors are 0.9°, so 400 × 16 = **6400 steps per revolution**. Set
-`ra_steps_per_revolution` and `dec_steps_per_revolution` to 6400 rather than the 3200 default, which
-assumes a 1.8° motor. The KP35FM2 is the 1.8° one at 3200.
+The 36H motors are 0.9°, so 400 × 16 = **6400 steps per revolution**. At a 144:1 worm ratio (1:1 belt),
+that gives `6400 × 144 / 360 =` **`2560.0` steps per degree** (`AXIS1_STEPS_PER_DEGREE` and
+`AXIS2_STEPS_PER_DEGREE` in `firmware/Config.h`). The KP35FM2 is the 1.8° one at 3200 steps/rev.
 
 **Current.** Measure the voltage on the `Vref` pad against GND and turn the pot:
 

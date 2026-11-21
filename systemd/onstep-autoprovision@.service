@@ -1,0 +1,30 @@
+[Unit]
+Description=OnStepX NodeMCU Auto-Provisioner for /dev/%I
+Documentation=https://github.com/hjd1964/OnStepX
+BindsTo=dev-%i.device
+After=dev-%i.device local-fs.target
+# Complete firmware check/flash before INDI server starts on boot
+Before=indiserver.service indiwebmanager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+EnvironmentFile=-/etc/onstep-autoprovision/config.env
+Environment=ARDUINO_DIRECTORIES_DATA=/var/cache/onstep-arduino
+Environment=ARDUINO_DIRECTORIES_DOWNLOADS=/var/cache/onstep-arduino/staging
+Environment=ARDUINO_DIRECTORIES_USER=/var/cache/onstep-arduino/user
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/opt/onstep-autoprovision/.venv/bin/python /opt/onstep-autoprovision/scripts/onstep_provision.py --device /dev/%I
+# Allow up to 15 minutes when live-compiling OnStepX on-Pi for a brand-new board type
+TimeoutStartSec=900
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=onstep-autoprovision
+
+# Security hardening while permitting /dev/onstep, firmware cache, and arduino-cli cache writes
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/dev /run/lock /opt/onstep-autoprovision/firmware /opt/onstep-autoprovision/firmware-src /var/cache/onstep-arduino
+SupplementaryGroups=dialout

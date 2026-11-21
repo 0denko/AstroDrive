@@ -1,7 +1,20 @@
-backend/api/.venv/
-frontend/ui/node_modules/
-frontend/ui/dist/
-esp32/firmware/.pio/
+# Python
 __pycache__/
 *.py[cod]
-.env
+.venv/
+venv/
+
+# Firmware build artifacts & upstream checkouts
+firmware/src/
+firmware/.build/
+firmware/prebuilt/*.bin
+firmware/prebuilt/manifest.json
+.pio/
+
+# Local runtime config (may contain device serials)
+config/onstep-autoprovision.env
+
+# OS / Editor
+.DS_Store
+*.swp
+.vscode/
