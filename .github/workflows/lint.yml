@@ -6,17 +6,24 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.13']
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python-version }}
 
       - name: Shell syntax check (bash -n) & ShellCheck
         run: |
@@ -28,38 +35,79 @@ jobs:
           done
           shellcheck -S warning "${SCRIPTS[@]}"
 
-      - name: Python bytecode compile check
+      - name: Python bytecode compile & module import smoke check (globbed)
         run: |
-          python3 -m py_compile \
-            scripts/onstep_common.py \
-            scripts/onstep_provision.py \
-            scripts/probe_onstep.py \
-            scripts/onstep_camera.py \
-            webui/onstep_webui.py \
-            tests/test_camera_stacker.py
+          python3 -m pip install --quiet 'numpy>=1.24,<3' 'pillow>=10,<12' 'pyserial>=3.5,<4'
+          shopt -s globstar nullglob
+          PY_FILES=(scripts/*.py webui/*.py tests/*.py)
+          python3 -m py_compile "${PY_FILES[@]}"
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, "scripts")
+          sys.path.insert(0, "webui")
+          for mod in ("onstep_common", "probe_onstep", "onstep_provision", "onstep_camera", "onstep_webui"):
+              __import__(mod)
+              print(f"[IMPORT OK] {mod}")
+          PY
 
-      - name: EAA LiveStacker synthetic unit tests
-        run: |
-          python3 -m pip install --quiet numpy pillow
-          python3 tests/test_camera_stacker.py
+      - name: Unit tests (EAA LiveStacker + R1 config + R6 manifest)
+        run: python3 tests/test_camera_stacker.py
 
-      - name: JavaScript syntax check (overlay.js + index.html inline script)
+      - name: JavaScript syntax check (overlay.js + all index.html script blocks)
         run: |
           node --check webui/overlay.js
           node -e '
             const fs = require("fs");
             const html = fs.readFileSync("webui/index.html", "utf8");
-            const m = html.match(/<script>([\s\S]*?)<\/script>/);
-            if (!m) throw new Error("Missing <script> block in webui/index.html");
-            new Function(m[1]);
-            console.log("webui/index.html inline JS OK");
+            const re = /<script\b[^>]*>([\s\S]*?)<\/script>/gi;
+            let count = 0, m;
+            while ((m = re.exec(html)) !== null) {
+              if (m[1].trim()) {
+                new Function(m[1]);
+                count++;
+              }
+            }
+            if (count === 0) throw new Error("Missing <script> block in webui/index.html");
+            console.log(`webui/index.html inline JS OK (${count} script block(s))`);
           '
 
-      - name: Web UI authentication & API security smoke test
+      - name: Isolated install.sh end-to-end execution test (R16)
+        run: |
+          TMP_ROOT="$(mktemp -d)"
+          trap 'rm -rf "${TMP_ROOT}"' EXIT
+          chmod +x install.sh
+          ASTRODRIVE_ROOT_PREFIX="${TMP_ROOT}" ASTRODRIVE_SKIP_PIP="true" \
+            ./install.sh --chroot --without-camera --github-repo 0denko/AstroDrive
+          # Verify critical files & token permissions (0640)
+          test -f "${TMP_ROOT}/etc/onstep-autoprovision/config.env"
+          test -f "${TMP_ROOT}/etc/onstep-autoprovision/install-meta.env"
+          test -f "${TMP_ROOT}/etc/onstep-autoprovision/webui.token"
+          test "$(stat -c %a "${TMP_ROOT}/etc/onstep-autoprovision/webui.token")" = "640"
+          test -x "${TMP_ROOT}/opt/onstep-autoprovision/scripts/onstep_camera.py"
+          test -f "${TMP_ROOT}/etc/systemd/system/onstep-camera.service"
+          test -f "${TMP_ROOT}/etc/udev/rules.d/99-onstep-camera.rules"
+          # Idempotent re-run must repair loosened token permissions and succeed cleanly
+          chmod 0644 "${TMP_ROOT}/etc/onstep-autoprovision/webui.token"
+          ASTRODRIVE_ROOT_PREFIX="${TMP_ROOT}" ASTRODRIVE_SKIP_PIP="true" \
+            ./install.sh --chroot --without-camera --github-repo 0denko/AstroDrive
+          test "$(stat -c %a "${TMP_ROOT}/etc/onstep-autoprovision/webui.token")" = "640"
+          echo "ISOLATED install.sh EXECUTION TEST PASSED!"
+
+      - name: Web UI authentication, session token & API security smoke test
         run: |
           python3 - <<'PY'
-          import json, os, subprocess, sys, tempfile, time, urllib.error, urllib.request
+          import json, os, socket, subprocess, sys, tempfile, time, urllib.error, urllib.request
           from pathlib import Path
+
+          def wait_port(host: str, port: int, timeout: float = 8.0) -> None:
+              deadline = time.monotonic() + timeout
+              while time.monotonic() < deadline:
+                  try:
+                      with socket.create_connection((host, port), timeout=0.3):
+                          return
+                  except OSError:
+                      time.sleep(0.1)
+              raise RuntimeError(f"Server did not open {host}:{port} within {timeout}s")
 
           with tempfile.TemporaryDirectory() as td:
               td_p = Path(td)
@@ -71,9 +119,11 @@ jobs:
               state_dir = td_p / "state"
               captures_dir = state_dir / "captures"
               captures_dir.mkdir(parents=True)
-              (captures_dir / "astrodrive-20261121-010203.png").write_bytes(b"\x89PNG\r\n\x1a\ntest")
+              (captures_dir / "astrodrive-20261121-010203-123.png").write_bytes(b"\x89PNG\r\n\x1a\ntest")
               preview_file = td_p / "preview.jpg"
               preview_file.write_bytes(b"\xff\xd8\xff\xe0testjpg")
+              cam_status_file = td_p / "camera-status.json"
+              cam_status_file.write_text(json.dumps({"state": "disconnected", "enabled": False}))
               fw_dir = td_p / "fw"
               fw_dir.mkdir()
 
@@ -85,11 +135,12 @@ jobs:
                   "ONSTEP_CONFIG_FILE": str(cfg_file),
                   "ONSTEP_STATE_DIR": str(state_dir),
                   "CAMERA_PREVIEW_FILE": str(preview_file),
+                  "CAMERA_STATUS_FILE": str(cam_status_file),
                   "FIRMWARE_DIR": str(fw_dir),
               })
               proc = subprocess.Popen([sys.executable, "webui/onstep_webui.py"], env=env)
               try:
-                  time.sleep(0.8)
+                  wait_port("127.0.0.1", 18092)
                   # Unauthenticated GET /api/status must be redacted (no config/camera/usb_devices/network)
                   with urllib.request.urlopen("http://127.0.0.1:18092/api/status", timeout=5) as r:
                       st = json.loads(r.read())
@@ -102,7 +153,7 @@ jobs:
                       "/api/status?probe=1",
                       "/api/camera/preview.jpg",
                       "/api/camera/captures",
-                      "/api/camera/captures/astrodrive-20261121-010203.png",
+                      "/api/camera/captures/astrodrive-20261121-010203-123.png",
                   ):
                       try:
                           urllib.request.urlopen(f"http://127.0.0.1:18092{path}", timeout=5)
@@ -132,24 +183,36 @@ jobs:
                       except urllib.error.HTTPError as e:
                           assert e.code == 401, (path, e.code)
 
-                  # Authenticated GET /api/status returns full payload including camera
+                  # R8: Exchange Setup PIN for 12h session_token and use session_token for subsequent requests
+                  req = urllib.request.Request(
+                      "http://127.0.0.1:18092/api/auth/verify",
+                      data=b"{}",
+                      headers={"Content-Type": "application/json", "X-AstroDrive-Token": tok},
+                      method="POST",
+                  )
+                  with urllib.request.urlopen(req, timeout=5) as r:
+                      auth_res = json.loads(r.read())
+                      sess_tok = auth_res["session_token"]
+                      assert sess_tok.startswith("sess_") and auth_res["expires_in_sec"] > 0
+
+                  # Authenticated GET /api/status using session_token returns full payload including camera
                   req = urllib.request.Request(
                       "http://127.0.0.1:18092/api/status",
-                      headers={"X-AstroDrive-Token": tok},
+                      headers={"X-AstroDrive-Token": sess_tok},
                   )
                   with urllib.request.urlopen(req, timeout=5) as r:
                       st = json.loads(r.read())
                       assert st["authenticated"] is True and "config" in st and "health" in st and "camera" in st
 
                   # Authenticated GET /api/logs & camera preview & captures succeed
-                  for path in ("/api/logs", "/api/camera/preview.jpg", "/api/camera/captures", "/api/camera/captures/astrodrive-20261121-010203.png"):
-                      req = urllib.request.Request(f"http://127.0.0.1:18092{path}", headers={"X-AstroDrive-Token": tok})
+                  for path in ("/api/logs", "/api/camera/preview.jpg", "/api/camera/captures", "/api/camera/captures/astrodrive-20261121-010203-123.png"):
+                      req = urllib.request.Request(f"http://127.0.0.1:18092{path}", headers={"X-AstroDrive-Token": sess_tok})
                       with urllib.request.urlopen(req, timeout=5) as r:
                           assert r.status == 200, (path, r.status)
 
                   # Path traversal / invalid capture filenames must be rejected with 400
                   for bad in ("/api/camera/captures/..%2F..%2Fetc%2Fpasswd", "/api/camera/captures/evil.png"):
-                      req = urllib.request.Request(f"http://127.0.0.1:18092{bad}", headers={"X-AstroDrive-Token": tok})
+                      req = urllib.request.Request(f"http://127.0.0.1:18092{bad}", headers={"X-AstroDrive-Token": sess_tok})
                       try:
                           urllib.request.urlopen(req, timeout=5)
                           raise AssertionError(f"Expected 400 for {bad}")
@@ -160,7 +223,7 @@ jobs:
                   req = urllib.request.Request(
                       "http://127.0.0.1:18092/api/camera/config",
                       data=json.dumps({"mode": "fixed_ref", "keep_pct": 25, "stretch_asinh": 6.5}).encode(),
-                      headers={"Content-Type": "application/json", "X-AstroDrive-Token": tok},
+                      headers={"Content-Type": "application/json", "X-AstroDrive-Token": sess_tok},
                       method="POST",
                   )
                   with urllib.request.urlopen(req, timeout=5) as r:
@@ -170,7 +233,7 @@ jobs:
                   req = urllib.request.Request(
                       "http://127.0.0.1:18092/api/camera/action/lock-auto",
                       data=b"{}",
-                      headers={"Content-Type": "application/json", "X-AstroDrive-Token": tok},
+                      headers={"Content-Type": "application/json", "X-AstroDrive-Token": sess_tok},
                       method="POST",
                   )
                   with urllib.request.urlopen(req, timeout=5) as r:
@@ -181,7 +244,7 @@ jobs:
                   req = urllib.request.Request(
                       "http://127.0.0.1:18092/api/config",
                       data=json.dumps({"GITHUB_REPO": "attacker/evil"}).encode(),
-                      headers={"Content-Type": "application/json", "X-AstroDrive-Token": tok},
+                      headers={"Content-Type": "application/json", "X-AstroDrive-Token": sess_tok},
                       method="POST",
                   )
                   try:

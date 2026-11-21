@@ -1,0 +1,8 @@
+# Minimum tested versions for AstroDrive's USB Camera & EAA Live Stacker (Pi 3B baseline).
+# On Raspberry Pi OS (Bookworm/Trixie), install.sh installs the distro packages
+# (`v4l-utils`, `python3-opencv`, `python3-numpy`) via apt and exposes them to
+# `/opt/onstep-autoprovision/.venv` via `--system-site-packages` to avoid building
+# OpenCV wheels on a Pi 3B.
+numpy>=1.24.0,<3.0.0
+opencv-python-headless>=4.6.0
+Pillow>=9.0.0

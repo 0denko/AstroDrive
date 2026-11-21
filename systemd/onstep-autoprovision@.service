@@ -15,8 +15,8 @@ Environment=ARDUINO_DIRECTORIES_DOWNLOADS=/var/cache/onstep-arduino/staging
 Environment=ARDUINO_DIRECTORIES_USER=/var/cache/onstep-arduino/user
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 ExecStart=/opt/onstep-autoprovision/.venv/bin/python /opt/onstep-autoprovision/scripts/onstep_provision.py --device /dev/%I
-# Allow up to 15 minutes when live-compiling OnStepX on-Pi for a brand-new board type
-TimeoutStartSec=900
+# Allow up to 30 minutes for worst-case fetch + on-Pi compile + dual-baud flash + settle
+TimeoutStartSec=1800
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=onstep-autoprovision

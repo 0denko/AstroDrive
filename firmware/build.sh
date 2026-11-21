@@ -167,7 +167,7 @@ build_profile() {
       ${esptool_cmd} --chip esp32 merge_bin \
         -o "${out_dir}/${OUT_BIN}" \
         --flash_mode "${FLASH_MODE}" \
-        --flash_size 4MB \
+        --flash_size "${FLASH_SIZE:-4MB}" \
         0x1000 "${boot_bin}" \
         0x8000 "${part_bin}" \
         0x10000 "${app_bin}"
@@ -198,10 +198,23 @@ build_profile() {
   fw_version="${ver_major}.${ver_minor}${ver_patch}"
   git_sha="$(git -C "${SRC_DIR}" rev-parse --short HEAD)"
   build_utc="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  local source_fp
+
+  # R14: Fold toolchain versions, CORE_SPEC, and build.sh hash into source_fp so
+  # toolchain or build-script changes never get skipped as "unchanged".
+  local cli_ver esptool_ver build_sh_sha source_fp
+  cli_ver="$(arduino-cli version 2>/dev/null | head -n 1 || echo unknown)"
+  # shellcheck disable=SC2086
+  esptool_ver="$($(find_esptool_cmd) version 2>/dev/null | head -n 1 || echo unknown)"
+  build_sh_sha="$(sha256sum "${BASH_SOURCE[0]}" | awk '{print $1}')"
   source_fp="$(
     {
       printf 'onstepx=%s\n' "$(git -C "${SRC_DIR}" rev-parse HEAD)"
+      printf 'core=%s\n' "${CORE_SPEC}"
+      printf 'fqbn=%s\n' "${FQBN}"
+      printf 'flash_mode=%s\n' "${FLASH_MODE}"
+      printf 'arduino_cli=%s\n' "${cli_ver}"
+      printf 'esptool=%s\n' "${esptool_ver}"
+      printf 'build_sh=%s\n' "${build_sh_sha}"
       find "${prof_dir}" -type f | LC_ALL=C sort | while IFS= read -r f; do
         sha256sum "${f}" | awk -v rel="${f#"${prof_dir}/"}" '{print $1, rel}'
       done

@@ -7,8 +7,7 @@ venv/
 # Firmware build artifacts & upstream checkouts
 firmware/src/
 firmware/.build/
-firmware/prebuilt/*.bin
-firmware/prebuilt/manifest.json
+firmware/prebuilt/**
 .pio/
 
 # Local runtime config (may contain device serials)

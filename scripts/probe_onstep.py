@@ -73,12 +73,14 @@ def main() -> int:
     args = parser.parse_args()
 
     bauds = [int(b.strip()) for b in args.bauds.split(",") if b.strip()]
+    had_serial_error = False
     for baud in bauds:
         try:
             info = probe_port(args.device, baud, timeout=args.timeout)
         except serial.SerialException as exc:
-            print(f"[ERROR] Could not open {args.device} at {baud} baud: {exc}", file=sys.stderr)
-            return 2
+            had_serial_error = True
+            print(f"[WARNING] Could not open {args.device} at {baud} baud: {exc}", file=sys.stderr)
+            continue
 
         if info:
             print(f"Device:   {args.device}")
@@ -89,7 +91,7 @@ def main() -> int:
             return 0
 
     print(f"[FAIL] No OnStep/OnStepX response on {args.device} across bauds {bauds}", file=sys.stderr)
-    return 1
+    return 2 if had_serial_error else 1
 
 
 if __name__ == "__main__":

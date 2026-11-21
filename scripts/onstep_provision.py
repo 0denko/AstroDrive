@@ -52,7 +52,22 @@ STATE_DIR = Path(os.environ.get("ONSTEP_STATE_DIR", "/var/lib/onstep-autoprovisi
 STATUS_FILE = STATE_DIR / "provision-status.json"
 FLASH_ONCE_DIR = STATE_DIR / "flash-once"
 ONLINE_CHECK_STAMP = STATE_DIR / "last-online-check"
-ONLINE_CHECK_MIN_INTERVAL_SEC = int(os.environ.get("ONLINE_CHECK_MIN_INTERVAL_SEC", "21600"))  # 6 hours
+def safe_int(raw: Optional[str], default: int) -> int:
+    try:
+        return int(str(raw).strip()) if raw is not None and str(raw).strip() else default
+    except (ValueError, TypeError):
+        return default
+
+
+def safe_float(raw: Optional[str], default: float) -> float:
+    try:
+        return float(str(raw).strip()) if raw is not None and str(raw).strip() else default
+    except (ValueError, TypeError):
+        return default
+
+
+ONLINE_CHECK_MIN_INTERVAL_SEC = safe_int(os.environ.get("ONLINE_CHECK_MIN_INTERVAL_SEC"), 21600)  # 6 hours
+LOCK_TIMEOUT_SEC = safe_float(os.environ.get("ONSTEP_LOCK_TIMEOUT_SEC"), 90.0)
 
 DEFAULT_CHIP_PROFILE_MAP = {
     "esp8266": "nodemcu-esp8266-tmc2208s",
@@ -75,6 +90,21 @@ def write_provision_status(state: str, message: str, device: str = "", extra: Op
         pass
 
 
+def has_valid_flash_once_ticket(device: str) -> bool:
+    """Peek at single-use flash authorization ticket without consuming it yet."""
+    ticket = FLASH_ONCE_DIR / os.path.basename(device)
+    try:
+        if ticket.is_file():
+            age = time.time() - ticket.stat().st_mtime
+            if 0 <= age <= 300:
+                return True
+            ticket.unlink(missing_ok=True)
+            LOG.warning("Removed expired flash authorization ticket for %s (age=%.0fs).", device, age)
+    except OSError as exc:
+        LOG.warning("Could not inspect flash-once ticket %s: %s", ticket, exc)
+    return False
+
+
 def consume_flash_once_ticket(device: str) -> bool:
     ticket = FLASH_ONCE_DIR / os.path.basename(device)
     try:
@@ -88,6 +118,23 @@ def consume_flash_once_ticket(device: str) -> bool:
     except OSError as exc:
         LOG.warning("Could not read/unlink flash-once ticket %s: %s", ticket, exc)
     return False
+
+
+def acquire_lock_with_timeout(lock_fd, timeout_sec: float = LOCK_TIMEOUT_SEC) -> bool:
+    """Acquire exclusive flock with a bounded timeout so waiting units fail visibly (R4)."""
+    deadline = time.monotonic() + max(1.0, timeout_sec)
+    logged = False
+    while True:
+        try:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            if not logged:
+                LOG.warning("Another provisioning/update run holds %s; waiting up to %.0fs...", LOCK_PATH, timeout_sec)
+                logged = True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.5)
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -218,7 +265,11 @@ def detect_esp_chip(device: str, expected_chip: str = "auto") -> Optional[str]:
         "chip_id",
     ]
     LOG.info("Detecting MCU silicon via esptool (--chip %s) on %s...", expected_chip, device)
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
+    except subprocess.TimeoutExpired:
+        LOG.error("esptool chip_id timed out after 25s on %s.", device)
+        return None
     output = f"{res.stdout}\n{res.stderr}"
     if res.returncode != 0:
         LOG.error("esptool chip_id failed on %s: %s", device, output.strip())
@@ -228,8 +279,7 @@ def detect_esp_chip(device: str, expected_chip: str = "auto") -> Optional[str]:
     if not m:
         m = re.search(r"Chip is\s+([A-Za-z0-9\-]+)", output)
     if not m:
-        if expected_chip != "auto":
-            return expected_chip
+        # Never substitute configured TARGET_CHIP when esptool output is unparseable
         LOG.error("Could not parse chip type from esptool output: %s", output.strip())
         return None
 
@@ -245,23 +295,41 @@ def detect_esp_chip(device: str, expected_chip: str = "auto") -> Optional[str]:
     else:
         normalized = raw_chip
 
+    if expected_chip != "auto" and normalized != expected_chip:
+        LOG.error("Detected chip %r does not match configured TARGET_CHIP=%r.", normalized, expected_chip)
+        return None
+
     LOG.info("Detected Espressif MCU: %s (normalized: %s)", raw_chip, normalized)
     return normalized
 
 
-def load_manifest(profile_dir: Path) -> tuple[Path, dict[str, str]]:
+def load_manifest(
+    profile_dir: Path,
+    expected_profile: Optional[str] = None,
+    expected_chip: Optional[str] = None,
+) -> tuple[Path, dict[str, str]]:
+    """Load and verify firmware manifest.json + binary SHA-256 (R6: strict profile & chip checks)."""
     manifest_path = profile_dir / "manifest.json"
     if not manifest_path.is_file():
         raise FileNotFoundError(f"Firmware manifest not found: {manifest_path}")
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    bin_name = manifest.get("binary")
-    expected_sha256 = manifest.get("sha256", "").lower()
+    bin_name = str(manifest.get("binary") or "").strip()
+    expected_sha256 = str(manifest.get("sha256") or "").strip().lower()
+    mf_profile = str(manifest.get("profile") or "").strip()
+    mf_chip = str(manifest.get("chip") or "").strip().lower()
+
     if not bin_name or not expected_sha256:
         raise ValueError("manifest.json must contain 'binary' and 'sha256' fields")
+    if not mf_profile or not mf_chip:
+        raise ValueError("manifest.json must contain 'profile' and 'chip' fields")
+    if expected_profile and mf_profile != expected_profile:
+        raise ValueError(f"Manifest profile mismatch: expected {expected_profile!r}, got {mf_profile!r}")
+    if expected_chip and mf_chip != expected_chip.lower():
+        raise ValueError(f"Manifest chip mismatch: expected {expected_chip!r}, got {mf_chip!r}")
 
-    bin_path = profile_dir / bin_name
-    if not bin_path.is_file():
+    bin_path = (profile_dir / bin_name).resolve()
+    if profile_dir.resolve() not in bin_path.parents or not bin_path.is_file():
         raise FileNotFoundError(f"Firmware binary not found: {bin_path}")
 
     actual_sha256 = hashlib.sha256(bin_path.read_bytes()).hexdigest().lower()
@@ -298,18 +366,25 @@ def try_online_release_fetch(profile: str, firmware_root: Path, force: bool = Fa
         return False
 
     LOG.info("Checking GitHub Releases (%s) for latest '%s' firmware...", github_repo, profile)
-    res = subprocess.run(
-        [str(updater), "--repo", github_repo, "--profile", profile, "--out-dir", str(firmware_root)],
-        capture_output=True,
-        text=True,
-        timeout=150,
-    )
     try:
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
-        ONLINE_CHECK_STAMP.touch()
-    except OSError:
-        pass
+        # R5: Align timeout (600s) with update_firmware.sh worst-case curl retry budgets
+        res = subprocess.run(
+            [str(updater), "--repo", github_repo, "--profile", profile, "--out-dir", str(firmware_root)],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+    except subprocess.TimeoutExpired:
+        LOG.warning("Online release fetch timed out after 600s for profile '%s'.", profile)
+        return False
+
     if res.returncode == 0:
+        # Touch throttle stamp ONLY on success so a transient failure never suppresses checks for 6h
+        try:
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            ONLINE_CHECK_STAMP.touch()
+        except OSError:
+            pass
         if res.stdout.strip():
             LOG.info("%s", res.stdout.strip())
         return True
@@ -326,19 +401,26 @@ def try_live_compile(profile: str, firmware_root: Path) -> bool:
         LOG.warning("Live compile requested but `arduino-cli` is not installed on PATH.")
         return False
     if not has_internet():
-        LOG.warning("Pi is offline; cannot pull latest OnStepX for live compilation.")
+        LOG.warning("Pi is offline; cannot pull OnStepX for live compilation.")
         return False
 
-    LOG.info("Pulling pinned upstream OnStepX and compiling profile '%s' on Pi (this may take several minutes)...", profile)
+    ref_file = builder.parent / "onstepx.ref"
+    ref_desc = f"pinned ref ({ref_file.read_text(encoding='utf-8').strip()[:12]})" if ref_file.is_file() else "upstream main (onstepx.ref absent)"
+    LOG.info("Compiling OnStepX [%s] for profile '%s' on Pi (this may take several minutes)...", ref_desc, profile)
     env = os.environ.copy()
     env.setdefault("ESPTOOL_PY", f"{sys.executable} -m esptool")
-    res = subprocess.run(
-        [str(builder), "--profile", profile, "--out-dir", str(firmware_root)],
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=720,
-    )
+    try:
+        res = subprocess.run(
+            [str(builder), "--profile", profile, "--out-dir", str(firmware_root)],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=720,
+        )
+    except subprocess.TimeoutExpired:
+        LOG.error("Live OnStepX compilation timed out after 720s for profile '%s'.", profile)
+        return False
+
     if res.returncode == 0:
         LOG.info("Live OnStepX compilation succeeded for profile '%s'.", profile)
         return True
@@ -353,6 +435,7 @@ def try_live_compile(profile: str, firmware_root: Path) -> bool:
 
 def resolve_firmware_bundle(
     profile: str,
+    expected_chip: str,
     firmware_root: Path,
     online_check: bool,
     auto_compile: bool,
@@ -361,13 +444,10 @@ def resolve_firmware_bundle(
 ) -> tuple[Optional[Path], Optional[dict[str, str]]]:
     profile_dir = firmware_root / profile
 
-    # Support legacy flat layout (/opt/onstep-autoprovision/firmware/manifest.json) as fallback
     def try_local() -> tuple[Optional[Path], Optional[dict[str, str]]]:
         for candidate in (profile_dir, firmware_root):
             try:
-                bp, mf = load_manifest(candidate)
-                if mf.get("profile", profile) == profile:
-                    return bp, mf
+                return load_manifest(candidate, expected_profile=profile, expected_chip=expected_chip)
             except Exception:
                 continue
         return None, None
@@ -402,7 +482,8 @@ def flash_firmware(
     flash_mode: str,
     primary_baud: str,
     fallback_baud: str,
-) -> bool:
+) -> tuple[bool, str]:
+    last_err = ""
     for baud in [primary_baud, fallback_baud]:
         cmd = [
             sys.executable,
@@ -435,17 +516,18 @@ def flash_firmware(
             device,
             baud,
         )
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        except subprocess.TimeoutExpired:
+            last_err = f"esptool timed out after 180s at {baud} baud"
+            LOG.warning("%s on %s.", last_err, device)
+            continue
         if res.returncode == 0:
             LOG.info("Firmware flash succeeded at %s baud.", baud)
-            return True
-        LOG.warning(
-            "esptool flash failed at %s baud (rc=%d): %s",
-            baud,
-            res.returncode,
-            res.stderr.strip() or res.stdout.strip(),
-        )
-    return False
+            return True, ""
+        last_err = (res.stderr.strip() or res.stdout.strip() or f"rc={res.returncode}")[-300:]
+        LOG.warning("esptool flash failed at %s baud (rc=%d): %s", baud, res.returncode, last_err)
+    return False, last_err
 
 
 def main() -> int:
@@ -474,27 +556,29 @@ def main() -> int:
     prefer_live_compile = env_bool("PREFER_LIVE_COMPILE", default=False)
     firmware_root = Path(os.environ.get("FIRMWARE_DIR", "/opt/onstep-autoprovision/firmware"))
     symlink_path = os.environ.get("SYMLINK_PATH", "/dev/onstep")
-    probe_bauds = [int(b) for b in env_list("PROBE_BAUDS") or ["9600", "115200", "57600", "19200"]]
-    flash_baud = os.environ.get("FLASH_BAUD", "460800")
-    flash_baud_fallback = os.environ.get("FLASH_BAUD_FALLBACK", "115200")
-    boot_settle = float(os.environ.get("BOOT_SETTLE_SECONDS", "2.5"))
+    probe_bauds = [safe_int(b, 0) for b in (env_list("PROBE_BAUDS") or ["9600", "115200", "57600", "19200"])]
+    probe_bauds = [b for b in probe_bauds if b > 0] or [9600, 115200, 57600, 19200]
+    flash_baud = os.environ.get("FLASH_BAUD", "460800").strip() or "460800"
+    flash_baud_fallback = os.environ.get("FLASH_BAUD_FALLBACK", "115200").strip() or "115200"
+    boot_settle = max(0.0, min(safe_float(os.environ.get("BOOT_SETTLE_SECONDS"), 2.5), 30.0))
     indi_auto_connect = env_bool("INDI_AUTO_CONNECT", default=False)
     indi_device_name = os.environ.get("INDI_DEVICE_NAME", "LX200 OnStep")
     chip_profile_map = parse_chip_profile_map()
 
-    flash_once_authorized = args.allow_flash_once or consume_flash_once_ticket(device)
+    # Peek at ticket without consuming yet so --dry-run / busy / allowlist aborts never burn it
+    flash_once_pending = args.allow_flash_once or has_valid_flash_once_ticket(device)
 
-    if not flash_once_authorized and not check_usb_allowlist(device):
+    if not flash_once_pending and not check_usb_allowlist(device):
         write_provision_status("skipped_allowlist", f"Device {device} is not in ALLOWED_USB_SERIALS/ALLOWED_USB_PATHS.", device)
         return 0
 
     LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(LOCK_PATH, "w", encoding="utf-8") as lock_fd:
-        try:
-            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            LOG.warning("Another provisioning run holds %s; waiting...", LOCK_PATH)
-            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+        if not acquire_lock_with_timeout(lock_fd):
+            msg = f"Timed out waiting for provisioner lock on {device} (another flash or update is running)."
+            LOG.error("%s", msg)
+            write_provision_status("busy", msg, device)
+            return 2
 
         # Guard against disrupting an active INDI driver or colliding with gpsd/ModemManager
         holders = find_device_holders(device)
@@ -526,7 +610,7 @@ def main() -> int:
         time.sleep(boot_settle)
 
         info = probe_any_baud(device, probe_bauds)
-        if info and not auto_upgrade and not flash_once_authorized:
+        if info and not auto_upgrade and not flash_once_pending:
             LOG.info(
                 "Detected working %s v%s (built %s) on %s @ %s baud.",
                 info["product"],
@@ -554,6 +638,9 @@ def main() -> int:
                 auto_upgrade,
             )
             return 0 if info else 3
+
+        # Consume the single-use ticket ONLY here at the actual can_flash decision point
+        flash_once_authorized = args.allow_flash_once or consume_flash_once_ticket(device)
 
         # S4 + M3: Allow flashing if:
         #   - AUTO_FLASH=true, OR
@@ -606,6 +693,7 @@ def main() -> int:
 
         bin_path, manifest = resolve_firmware_bundle(
             profile=profile,
+            expected_chip=detected_chip,
             firmware_root=firmware_root,
             online_check=online_check,
             auto_compile=auto_compile,
@@ -614,7 +702,7 @@ def main() -> int:
         )
         if not bin_path or not manifest:
             msg = (
-                f"No cached firmware found for '{profile}'. Connect the Pi to the internet "
+                f"No verified cached firmware found for '{profile}' ({detected_chip}). Connect the Pi to the internet "
                 "and click 'Download Firmware' in Setup Wizard Step 1."
             )
             LOG.error("%s", msg)
@@ -637,7 +725,7 @@ def main() -> int:
         flash_offset = manifest.get("flash_offset", "0x00000" if detected_chip == "esp8266" else "0x0")
         flash_mode = manifest.get("flash_mode", "dio")
 
-        if not flash_firmware(
+        flashed, flash_err = flash_firmware(
             device=device,
             bin_path=bin_path,
             target_chip=detected_chip,
@@ -645,8 +733,9 @@ def main() -> int:
             flash_mode=flash_mode,
             primary_baud=flash_baud,
             fallback_baud=flash_baud_fallback,
-        ):
-            msg = f"Flashing {profile} failed on {device}. Check the USB cable (or hold BOOT on ESP32) and retry."
+        )
+        if not flashed:
+            msg = f"Flashing {profile} failed on {device} ({flash_err or 'check USB cable / hold BOOT on ESP32'})."
             LOG.error("%s", msg)
             write_provision_status("flash_failed", msg, device, {"chip": detected_chip, "profile": profile})
             return 1

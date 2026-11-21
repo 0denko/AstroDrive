@@ -5,9 +5,11 @@ on:
     branches: [main]
     paths:
       - 'firmware/**'
+      - 'requirements.txt'
+      - 'scripts/update_firmware.sh'
       - '.github/workflows/build-firmware.yml'
   schedule:
-    # Weekly compile-test against latest upstream hjd1964/OnStepX (Sundays 04:00 UTC)
+    # Weekly verification build against pinned firmware/onstepx.ref (Sundays 04:00 UTC)
     - cron: '0 4 * * 0'
   workflow_dispatch:
     inputs:
@@ -116,7 +118,7 @@ jobs:
           fi
 
           if [ "${SHOULD_PUBLISH}" = "true" ]; then
-            DATE_TAG="firmware-$(date -u +%Y.%m.%d-%H%M)"
+            DATE_TAG="firmware-$(date -u +%Y.%m.%d-%H%M%S)"
             ESP32_VER="$(python3 -c 'import json; print(json.load(open("release-assets/manifest-nodemcu-esp32-tmc2208s.json"))["firmware_version"])')"
             ESP32_SHA="$(python3 -c 'import json; print(json.load(open("release-assets/manifest-nodemcu-esp32-tmc2208s.json"))["onstepx_commit"])')"
             gh release create "${DATE_TAG}" release-assets/* \

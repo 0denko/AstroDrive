@@ -12,10 +12,12 @@
 #                        (default is "false" for safety; Wizard offers 1-click flash)
 #   --github-repo O/R    Pre-configure GITHUB_REPO="owner/repo" for online updates
 #   --skip-udev-trigger  Skip `udevadm trigger` (used during background self-updates)
+#   --lock-held          Caller already holds /run/lock/onstep-provision.lock
 #   --chroot             Chroot-safe mode (used by .github/workflows/build-pi-image.yml)
 set -euo pipefail
 
-if [ "$(id -u)" -ne 0 ]; then
+ROOT_PREFIX="${ASTRODRIVE_ROOT_PREFIX:-}"
+if [ "$(id -u)" -ne 0 ] && [ -z "${ROOT_PREFIX}" ]; then
   echo "[ERROR] Please run with sudo: sudo ./install.sh" >&2
   exit 1
 fi
@@ -25,6 +27,7 @@ EXPLICIT_WITH_CAMERA="false"
 WITH_ARDUINO_CLI="false"
 ENABLE_AUTO_FLASH="false"
 SKIP_UDEV_TRIGGER="false"
+LOCK_HELD="false"
 CHROOT_MODE="false"
 GITHUB_REPO_ARG=""
 
@@ -35,10 +38,11 @@ while [[ $# -gt 0 ]]; do
     --with-arduino-cli) WITH_ARDUINO_CLI="true"; shift ;;
     --enable-auto-flash) ENABLE_AUTO_FLASH="true"; shift ;;
     --skip-udev-trigger) SKIP_UDEV_TRIGGER="true"; shift ;;
+    --lock-held) LOCK_HELD="true"; shift ;;
     --github-repo) GITHUB_REPO_ARG="${2:?Missing owner/repo}"; shift 2 ;;
     --chroot) CHROOT_MODE="true"; shift ;;
     -h|--help)
-      sed -n '2,16p' "$0"
+      sed -n '2,17p' "$0"
       exit 0
       ;;
     *)
@@ -49,23 +53,38 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Auto-detect chroot even if --chroot wasn't passed explicitly
-if command -v systemd-detect-virt >/dev/null 2>&1 && systemd-detect-virt --chroot >/dev/null 2>&1; then
+if [ -n "${ROOT_PREFIX}" ] || { command -v systemd-detect-virt >/dev/null 2>&1 && systemd-detect-virt --chroot >/dev/null 2>&1; }; then
   CHROOT_MODE="true"
 fi
 
+# Serialize manual setup.sh / install.sh runs with flashing and background self-updates
+if [ "${CHROOT_MODE}" = "false" ] && [ "${LOCK_HELD}" != "true" ] && command -v flock >/dev/null 2>&1; then
+  mkdir -p /run/lock
+  exec 9>/run/lock/onstep-provision.lock
+  if ! flock -w 120 9; then
+    echo "[ERROR] Timed out waiting for /run/lock/onstep-provision.lock (another install or flash is running)." >&2
+    exit 1
+  fi
+fi
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INSTALL_DIR="/opt/onstep-autoprovision"
-CONFIG_DIR="/etc/onstep-autoprovision"
+INSTALL_DIR="${ROOT_PREFIX}/opt/onstep-autoprovision"
+CONFIG_DIR="${ROOT_PREFIX}/etc/onstep-autoprovision"
 CONFIG_FILE="${CONFIG_DIR}/config.env"
 META_FILE="${CONFIG_DIR}/install-meta.env"
 TOKEN_FILE="${CONFIG_DIR}/webui.token"
-STATE_DIR="/var/lib/onstep-autoprovision"
-ARDUINO_CACHE="/var/cache/onstep-arduino"
+STATE_DIR="${ROOT_PREFIX}/var/lib/onstep-autoprovision"
+ARDUINO_CACHE="${ROOT_PREFIX}/var/cache/onstep-arduino"
+UDEV_DIR="${ROOT_PREFIX}/etc/udev/rules.d"
+SYSTEMD_DIR="${ROOT_PREFIX}/etc/systemd/system"
 COMMON_PY="${INSTALL_DIR}/scripts/onstep_common.py"
 
-# Helper (m1 / #12): update KEY="VALUE" if present, or append if missing, via shared onstep_common.py
+# Helpers (R1): read & write config.env safely via onstep_common.py (never `source` as root)
 set_config_key() {
   python3 "${COMMON_PY}" set-config "${CONFIG_FILE}" "$1" "$2"
+}
+get_config_key() {
+  python3 "${COMMON_PY}" get-config "${CONFIG_FILE}" "$1" "${2:-}" 2>/dev/null || printf '%s' "${2:-}"
 }
 
 # Helper (m7 / #3): install pinned arduino-cli v1.6.0 with verified SHA-256 + timeouts & retries
@@ -168,7 +187,7 @@ if [ -d "${REPO_DIR}/firmware/prebuilt" ]; then
   done
 fi
 
-if [ "${WITH_CAMERA}" = "true" ]; then
+if [ "${WITH_CAMERA}" = "true" ] && [ -z "${ROOT_PREFIX}" ]; then
   CAM_PKGS=(v4l-utils python3-opencv python3-numpy)
   MISSING_CAM_PKGS=()
   for pkg in "${CAM_PKGS[@]}"; do
@@ -185,34 +204,52 @@ if [ "${WITH_CAMERA}" = "true" ]; then
   fi
 fi
 
-# m2 + #7: Validate venv health and skip pip install when requirements.txt + Python version are unchanged
+# Build new/broken venv in .venv.new and swap atomically so a failed offline pip install never destroys a working venv
 echo "==> Setting up Python virtual environment (${INSTALL_DIR}/.venv)..."
 VENV_DIR="${INSTALL_DIR}/.venv"
+VENV_NEW="${INSTALL_DIR}/.venv.new"
 VENV_STAMP_FILE="${VENV_DIR}/.deps-stamp"
-if [ -d "${VENV_DIR}" ]; then
-  if ! "${VENV_DIR}/bin/python" -c "import sys, pip" >/dev/null 2>&1; then
-    echo "==> Existing Python venv is stale or broken; recreating..."
-    rm -rf "${VENV_DIR}"
-  fi
-fi
+NEED_NEW_VENV="false"
 if [ ! -d "${VENV_DIR}" ]; then
-  if [ "${WITH_CAMERA}" = "true" ]; then
-    python3 -m venv --system-site-packages "${VENV_DIR}"
-  else
-    python3 -m venv "${VENV_DIR}"
-  fi
-elif [ "${WITH_CAMERA}" = "true" ] && [ -f "${VENV_DIR}/pyvenv.cfg" ]; then
-  # Expose Debian python3-opencv & python3-numpy inside existing venv without rebuilding wheels on Pi 3B
-  sed -i 's/^include-system-site-packages *= *false/include-system-site-packages = true/' "${VENV_DIR}/pyvenv.cfg"
+  NEED_NEW_VENV="true"
+elif ! "${VENV_DIR}/bin/python" -c "import sys, pip" >/dev/null 2>&1; then
+  echo "==> Existing Python venv is stale or broken; building replacement in ${VENV_NEW}..."
+  NEED_NEW_VENV="true"
 fi
-DESIRED_STAMP="$(printf '%s\n' "$("${VENV_DIR}/bin/python" --version 2>&1)" "$(sha256sum "${INSTALL_DIR}/requirements.txt" | awk '{print $1}')" | sha256sum | awk '{print $1}')"
-CURRENT_STAMP="$(cat "${VENV_STAMP_FILE}" 2>/dev/null || true)"
-if [ "${DESIRED_STAMP}" = "${CURRENT_STAMP}" ]; then
-  echo "==> Python dependencies already up to date (skipping pip install)."
+
+if [ "${NEED_NEW_VENV}" = "true" ]; then
+  rm -rf "${VENV_NEW}"
+  if [ "${WITH_CAMERA}" = "true" ]; then
+    python3 -m venv --system-site-packages "${VENV_NEW}"
+  else
+    python3 -m venv "${VENV_NEW}"
+  fi
+  if [ "${ASTRODRIVE_SKIP_PIP:-false}" != "true" ]; then
+    "${VENV_NEW}/bin/pip" install --upgrade pip >/dev/null
+    "${VENV_NEW}/bin/pip" install -r "${INSTALL_DIR}/requirements.txt"
+  fi
+  NEW_STAMP="$(printf '%s\n' "$("${VENV_NEW}/bin/python" --version 2>&1)" "$(sha256sum "${INSTALL_DIR}/requirements.txt" | awk '{print $1}')" | sha256sum | awk '{print $1}')"
+  printf '%s\n' "${NEW_STAMP}" > "${VENV_NEW}/.deps-stamp"
+  rm -rf "${VENV_DIR}.old"
+  if [ -d "${VENV_DIR}" ]; then
+    mv "${VENV_DIR}" "${VENV_DIR}.old"
+  fi
+  mv "${VENV_NEW}" "${VENV_DIR}"
+  rm -rf "${VENV_DIR}.old"
 else
-  "${VENV_DIR}/bin/pip" install --upgrade pip >/dev/null
-  "${VENV_DIR}/bin/pip" install -r "${INSTALL_DIR}/requirements.txt"
-  printf '%s\n' "${DESIRED_STAMP}" > "${VENV_STAMP_FILE}"
+  if [ "${WITH_CAMERA}" = "true" ] && [ -f "${VENV_DIR}/pyvenv.cfg" ]; then
+    # Expose Debian python3-opencv & python3-numpy inside existing venv without rebuilding wheels on Pi 3B
+    sed -i 's/^include-system-site-packages *= *false/include-system-site-packages = true/' "${VENV_DIR}/pyvenv.cfg"
+  fi
+  DESIRED_STAMP="$(printf '%s\n' "$("${VENV_DIR}/bin/python" --version 2>&1)" "$(sha256sum "${INSTALL_DIR}/requirements.txt" | awk '{print $1}')" | sha256sum | awk '{print $1}')"
+  CURRENT_STAMP="$(cat "${VENV_STAMP_FILE}" 2>/dev/null || true)"
+  if [ "${DESIRED_STAMP}" = "${CURRENT_STAMP}" ]; then
+    echo "==> Python dependencies already up to date (skipping pip install)."
+  elif [ "${ASTRODRIVE_SKIP_PIP:-false}" != "true" ]; then
+    "${VENV_DIR}/bin/pip" install --upgrade pip >/dev/null
+    "${VENV_DIR}/bin/pip" install -r "${INSTALL_DIR}/requirements.txt"
+    printf '%s\n' "${DESIRED_STAMP}" > "${VENV_STAMP_FILE}"
+  fi
 fi
 
 if [ "${WITH_ARDUINO_CLI}" = "true" ]; then
@@ -249,10 +286,9 @@ if [ "${ENABLE_AUTO_FLASH}" = "true" ]; then
   set_config_key "AUTO_FLASH" "true"
 elif [ "${EXISTING_CONFIG}" = "true" ]; then
   # M3 migration fix: older setup.sh installs silently armed AUTO_FLASH="true" with empty allowlists.
-  # Disarm unattended AUTO_FLASH during upgrade from pre-meta installs (or warn loudly if still armed with empty allowlists).
-  CUR_AUTO_FLASH="$(grep -E '^\s*AUTO_FLASH\s*=' "${CONFIG_FILE}" | tail -n 1 | cut -d= -f2- | tr -d '\"'\'' ' || true)"
-  CUR_SERIALS="$(grep -E '^\s*ALLOWED_USB_SERIALS\s*=' "${CONFIG_FILE}" | tail -n 1 | cut -d= -f2- | tr -d '\"'\'' ' || true)"
-  CUR_PATHS="$(grep -E '^\s*ALLOWED_USB_PATHS\s*=' "${CONFIG_FILE}" | tail -n 1 | cut -d= -f2- | tr -d '\"'\'' ' || true)"
+  CUR_AUTO_FLASH="$(get_config_key AUTO_FLASH false)"
+  CUR_SERIALS="$(get_config_key ALLOWED_USB_SERIALS "")"
+  CUR_PATHS="$(get_config_key ALLOWED_USB_PATHS "")"
   if [ "${CUR_AUTO_FLASH}" = "true" ]; then
     if [ "${PRE_META_UPGRADE}" = "true" ] || { [ -z "${CUR_SERIALS}" ] && [ -z "${CUR_PATHS}" ]; }; then
       echo "==> [SAFETY MIGRATION] Disabling unattended AUTO_FLASH=\"true\" in preserved ${CONFIG_FILE} (no USB allowlist set)."
@@ -274,13 +310,15 @@ if [ -n "${GITHUB_REPO_ARG}" ]; then
   set_config_key "GITHUB_REPO" "${GITHUB_REPO_ARG}"
 fi
 
-# M1: Generate persistent Web UI authentication token if not already present
+# M1: Generate persistent Web UI authentication token if missing, and ALWAYS enforce 0640 permissions
 if [ ! -f "${TOKEN_FILE}" ]; then
   echo "==> Generating Web Setup Wizard authentication token (${TOKEN_FILE})..."
   python3 -c 'import secrets; print(secrets.token_hex(16))' > "${TOKEN_FILE}"
-  chown root:dialout "${TOKEN_FILE}" 2>/dev/null || chown root:root "${TOKEN_FILE}"
-  chmod 0640 "${TOKEN_FILE}"
 fi
+if [ -z "${ROOT_PREFIX}" ]; then
+  chown root:dialout "${TOKEN_FILE}" 2>/dev/null || chown root:root "${TOKEN_FILE}"
+fi
+chmod 0640 "${TOKEN_FILE}"
 
 # Persist install metadata & flags so daily self-updates reproduce the exact install options
 INSTALLED_VERSION="$(tr -d '[:space:]' < "${REPO_DIR}/VERSION" 2>/dev/null || echo "1.3.0")"
@@ -296,30 +334,33 @@ EOF
 chmod 0644 "${META_FILE}"
 
 echo "==> Installing udev rules and systemd units..."
-install -m 0644 "${REPO_DIR}/udev/99-onstep-nodemcu.rules" /etc/udev/rules.d/99-onstep-nodemcu.rules
-install -m 0644 "${REPO_DIR}/udev/99-onstep-camera.rules" /etc/udev/rules.d/99-onstep-camera.rules
-install -m 0644 "${REPO_DIR}/systemd/onstep-autoprovision@.service" /etc/systemd/system/onstep-autoprovision@.service
-install -m 0644 "${REPO_DIR}/systemd/onstep-firmware-update.service" /etc/systemd/system/onstep-firmware-update.service
-install -m 0644 "${REPO_DIR}/systemd/onstep-firmware-update.timer" /etc/systemd/system/onstep-firmware-update.timer
-install -m 0644 "${REPO_DIR}/systemd/astrodrive-update.service" /etc/systemd/system/astrodrive-update.service
-install -m 0644 "${REPO_DIR}/systemd/astrodrive-update.timer" /etc/systemd/system/astrodrive-update.timer
-install -m 0644 "${REPO_DIR}/systemd/onstep-webui.service" /etc/systemd/system/onstep-webui.service
-install -m 0644 "${REPO_DIR}/systemd/onstep-camera.service" /etc/systemd/system/onstep-camera.service
+mkdir -p "${UDEV_DIR}" "${SYSTEMD_DIR}"
+install -m 0644 "${REPO_DIR}/udev/99-onstep-nodemcu.rules" "${UDEV_DIR}/99-onstep-nodemcu.rules"
+install -m 0644 "${REPO_DIR}/udev/99-onstep-camera.rules" "${UDEV_DIR}/99-onstep-camera.rules"
+install -m 0644 "${REPO_DIR}/systemd/onstep-autoprovision@.service" "${SYSTEMD_DIR}/onstep-autoprovision@.service"
+install -m 0644 "${REPO_DIR}/systemd/onstep-firmware-update.service" "${SYSTEMD_DIR}/onstep-firmware-update.service"
+install -m 0644 "${REPO_DIR}/systemd/onstep-firmware-update.timer" "${SYSTEMD_DIR}/onstep-firmware-update.timer"
+install -m 0644 "${REPO_DIR}/systemd/astrodrive-update.service" "${SYSTEMD_DIR}/astrodrive-update.service"
+install -m 0644 "${REPO_DIR}/systemd/astrodrive-update.timer" "${SYSTEMD_DIR}/astrodrive-update.timer"
+install -m 0644 "${REPO_DIR}/systemd/onstep-webui.service" "${SYSTEMD_DIR}/onstep-webui.service"
+install -m 0644 "${REPO_DIR}/systemd/onstep-camera.service" "${SYSTEMD_DIR}/onstep-camera.service"
 
 # Enable background firmware & software update timers + Web UI service + camera service (default on)
-systemctl enable onstep-firmware-update.timer >/dev/null 2>&1 || true
-systemctl enable astrodrive-update.timer >/dev/null 2>&1 || true
-systemctl enable onstep-webui.service >/dev/null 2>&1 || true
-CUR_CAMERA_ENABLED="$(grep -E '^\s*CAMERA_ENABLED\s*=' "${CONFIG_FILE}" | tail -n 1 | cut -d= -f2- | tr -d '\"'\'' ' || echo "true")"
-if [ "${WITH_CAMERA}" = "true" ] && [ "${CUR_CAMERA_ENABLED}" = "true" ]; then
-  systemctl enable onstep-camera.service >/dev/null 2>&1 || true
-else
-  systemctl disable onstep-camera.service >/dev/null 2>&1 || true
+CUR_CAMERA_ENABLED="$(get_config_key CAMERA_ENABLED true)"
+if [ -z "${ROOT_PREFIX}" ]; then
+  systemctl enable onstep-firmware-update.timer >/dev/null 2>&1 || true
+  systemctl enable astrodrive-update.timer >/dev/null 2>&1 || true
+  systemctl enable onstep-webui.service >/dev/null 2>&1 || true
+  if [ "${WITH_CAMERA}" = "true" ] && [ "${CUR_CAMERA_ENABLED}" = "true" ]; then
+    systemctl enable onstep-camera.service >/dev/null 2>&1 || true
+  else
+    systemctl disable onstep-camera.service >/dev/null 2>&1 || true
+  fi
 fi
 
 # S2: Install Nginx Astroberry UI overlay and surface any failure loudly (never swallow silently)
 OVERLAY_RESULT="not_installed"
-if [ -d /etc/nginx ]; then
+if [ -z "${ROOT_PREFIX}" ] && [ -d /etc/nginx ]; then
   mkdir -p /etc/nginx/snippets
   install -m 0644 "${REPO_DIR}/nginx/onstep-astroberry-overlay.conf" /etc/nginx/snippets/onstep-astroberry-overlay.conf
   if "${INSTALL_DIR}/scripts/configure_nginx_overlay.sh"; then
@@ -336,16 +377,18 @@ EOF
 fi
 
 # Disable gpsd USBAUTO so it cannot hijack /dev/ttyUSB* from OnStep/INDI
-if [ -f /etc/default/gpsd ] && grep -Eq '^\s*USBAUTO\s*=\s*"?true"?' /etc/default/gpsd; then
+if [ -z "${ROOT_PREFIX}" ] && [ -f /etc/default/gpsd ] && grep -Eq '^\s*USBAUTO\s*=\s*"?true"?' /etc/default/gpsd; then
   echo "==> Disabling USBAUTO in /etc/default/gpsd to prevent serial-port hijacking..."
   sed -i 's/^\s*USBAUTO=.*/USBAUTO="false"/' /etc/default/gpsd
 fi
 
 # S2: Pre-configure INDI LX200 OnStep defaults and track result visibly
 INDI_RESULT="ok"
-if ! "${INSTALL_DIR}/scripts/configure_indi_defaults.sh"; then
-  INDI_RESULT="failed"
-  echo "[WARNING] Could not pre-configure INDI defaults automatically. You can apply them in Setup Wizard Step 1." >&2
+if [ -z "${ROOT_PREFIX}" ]; then
+  if ! "${INSTALL_DIR}/scripts/configure_indi_defaults.sh"; then
+    INDI_RESULT="failed"
+    echo "[WARNING] Could not pre-configure INDI defaults automatically. You can apply them in Setup Wizard Step 1." >&2
+  fi
 fi
 
 NOW_UTC="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"

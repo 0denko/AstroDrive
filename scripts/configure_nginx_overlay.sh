@@ -69,17 +69,28 @@ if [ -z "${TARGET_CONF}" ]; then
   exit 2
 fi
 
-# #15: Grep fast-path — when already attached and status JSON already reflects it, skip python3!
+# Serialize concurrent runs (e.g., install.sh vs APT Post-Invoke hook)
+mkdir -p /run/lock 2>/dev/null || true
+exec 8>/run/lock/onstep-nginx-overlay.lock
+flock -w 30 8 || true
+
+# Verify fast-path with `nginx -t` so an interrupted earlier run cannot mask a broken config
 if grep -qF "${SNIPPET_PATH}" "${TARGET_CONF}"; then
-  if [ -f "${STATE_FILE}" ] && grep -q '"attached"' "${STATE_FILE}" 2>/dev/null; then
+  if nginx -t >/dev/null 2>&1; then
+    if [ -f "${STATE_FILE}" ] && grep -q '"attached"' "${STATE_FILE}" 2>/dev/null; then
+      exit 0
+    fi
+    echo "==> Astroberry Nginx overlay already attached to ${TARGET_CONF}."
+    write_status "attached" "Attached to ${TARGET_CONF}"
     exit 0
+  else
+    echo "[ERROR] Astroberry Nginx overlay include present in ${TARGET_CONF}, but nginx -t failed." >&2
+    write_status "failed" "nginx -t failed on ${TARGET_CONF}; use port 8090."
+    exit 1
   fi
-  echo "==> Astroberry Nginx overlay already attached to ${TARGET_CONF}."
-  write_status "attached" "Attached to ${TARGET_CONF}"
-  exit 0
 fi
 
-BACKUP="${TARGET_CONF}.onstep.bak"
+BACKUP="${TARGET_CONF}.onstep.$$.bak"
 cp -a "${TARGET_CONF}" "${BACKUP}"
 
 # Insert include into ONLY the first matching `server {` block (count=1)

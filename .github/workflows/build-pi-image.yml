@@ -7,6 +7,10 @@ on:
         description: 'Direct URL to upstream 64-bit Pi .img.xz (Astroberry OS v3.x or Raspberry Pi OS 64-bit)'
         required: true
         default: 'https://downloads.raspberrypi.com/raspios_arm64/images/raspios_arm64-2025-10-02/2025-10-01-raspios-trixie-arm64.img.xz'
+      base_image_sha256:
+        description: 'Optional expected SHA-256 hex digest for base_image_url (recommended for supply-chain verification)'
+        required: false
+        default: ''
       onstepx_ref:
         description: 'Upstream hjd1964/OnStepX commit SHA, branch, or tag (blank = pinned firmware/onstepx.ref)'
         required: false
@@ -26,14 +30,6 @@ on:
         required: false
         type: boolean
         default: false
-      hotspot_ssid:
-        description: 'Optional default dark-sky hotspot SSID (requires hotspot_password >= 8 chars)'
-        required: false
-        default: ''
-      hotspot_password:
-        description: 'Optional dark-sky hotspot WPA2 password (min 8 chars; leave blank to configure in Setup Wizard)'
-        required: false
-        default: ''
 
 permissions:
   contents: write
@@ -160,43 +156,15 @@ jobs:
             rm -rf /var/lib/apt/lists/* /tmp/onstep-overlay
           "
 
-          # Optional: write a NetworkManager fallback dark-sky hotspot keyfile directly
-          if [ -n "${HOTSPOT_SSID}" ] && [ "${#HOTSPOT_PASS}" -ge 8 ]; then
-            sudo mkdir -p /mnt/pi/etc/NetworkManager/system-connections
-            UUID="$(cat /proc/sys/kernel/random/uuid)"
-            sudo tee /mnt/pi/etc/NetworkManager/system-connections/astropi-hotspot.nmconnection >/dev/null <<EOF
-          [connection]
-          id=astropi-hotspot
-          uuid=${UUID}
-          type=wifi
-          interface-name=wlan0
-          autoconnect=true
-          autoconnect-priority=10
-
-          [wifi]
-          band=bg
-          mode=ap
-          ssid=${HOTSPOT_SSID}
-
-          [wifi-security]
-          key-mgmt=wpa-psk
-          psk=${HOTSPOT_PASS}
-
-          [ipv4]
-          address1=10.42.0.1/24
-          method=shared
-
-          [ipv6]
-          method=ignore
-          EOF
-            sudo chmod 600 /mnt/pi/etc/NetworkManager/system-connections/astropi-hotspot.nmconnection
-          fi
-
       - name: Unmount & clean up chroot
         if: always()
         run: |
           if mountpoint -q /mnt/pi; then
-            sudo mv /mnt/pi/etc/resolv.conf.orig /mnt/pi/etc/resolv.conf 2>/dev/null || true
+            if [ -e /mnt/pi/etc/resolv.conf.orig ]; then
+              sudo mv /mnt/pi/etc/resolv.conf.orig /mnt/pi/etc/resolv.conf || true
+            else
+              sudo rm -f /mnt/pi/etc/resolv.conf || true
+            fi
             sudo rm -f /mnt/pi/etc/resolv.conf.ci /mnt/pi/usr/bin/qemu-aarch64-static
             sudo umount -lf /mnt/pi/sys || true
             sudo umount -lf /mnt/pi/proc || true
@@ -223,7 +191,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          IMG_TAG="pi-image-$(date -u +%Y.%m.%d-%H%M)"
+          IMG_TAG="pi-image-$(date -u +%Y.%m.%d-%H%M%S)"
+          # R13: --latest=false ensures Pi image releases never displace firmware-* from the Latest slot
           gh release create "${IMG_TAG}" "${OUT_IMG}" "${OUT_SHA}" \
+            --latest=false \
             --title "AstroDrive OnStepX Pi Image (${IMG_TAG})" \
-            --notes "Ready-to-flash 64-bit Raspberry Pi image with the **AstroDrive** OnStepX auto-provisioner and Astroberry Web UI overlay baked in.\n\n- Flash with **Raspberry Pi Imager** (optionally set your Home Wi-Fi & SSH key in Imager OS Customisation).\n- Auto-detects any plugged-in NodeMCU (ESP8266 or ESP32), fetches or live-compiles the matching OnStepX firmware, flashes it, and publishes \`/dev/onstep\` for \`indi_lx200_OnStep\`.\n- Access the built-in AstroDrive OnStepX drawer inside \`http://astroberry.local\` (or standalone on port \`8090\`).\n- Dark-sky hotspot fallback: SSID \`${{ github.event.inputs.hotspot_ssid }}\` (IP \`10.42.0.1\`)."
+            --notes "Ready-to-flash 64-bit Raspberry Pi image with **AstroDrive** (OnStepX auto-provisioner, Setup Wizard, and USB camera/EAA live stacker) baked in.\n\n- Flash with **Raspberry Pi Imager** (set your Home Wi-Fi & SSH login in Imager OS Customisation when using Raspberry Pi OS).\n- Open the Setup Wizard at \`http://<pi-hostname>.local:8090/\` (or \`http://astroberry.local/onstep/\` when built on Astroberry OS) using the Setup PIN stored in \`/etc/onstep-autoprovision/webui.token\`.\n- Configure your private dark-sky field hotspot password safely inside **Setup Wizard Step 2**."

@@ -7,7 +7,8 @@ Wants=network-online.target
 Type=oneshot
 EnvironmentFile=-/etc/onstep-autoprovision/config.env
 ExecStart=/opt/onstep-autoprovision/scripts/update_software.sh
-TimeoutStartSec=600
+# Allow up to 60 minutes on a Pi 3B if apt/opencv/arduino cores are updated
+TimeoutStartSec=3600
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=astrodrive-update

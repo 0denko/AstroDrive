@@ -1,7 +1,27 @@
 #!/usr/bin/env bash
 # Lightweight, safety-gated self-updater for AstroDrive software (scripts, Web UI,
-# systemd units, udev rules, firmware profiles) with automatic rollback on failure (#10).
+# systemd units, udev rules, firmware profiles) with:
+#   - R1: Zero `source` of config.env / install-meta.env as root (parsed via onstep_common.py)
+#   - R2: Stage-exec into /run/astrodrive-updater so install.sh never overwrites the running script
+#   - R3: Pre-update tarball snapshot of the installed tree + local source backup for offline rollback
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# R2: Copy ourselves + onstep_common.py into tmpfs (/run/astrodrive-updater) and exec from there
+# so `install.sh` overwriting `/opt/onstep-autoprovision/scripts/update_software.sh` can never
+# corrupt the live bash interpreter reading by byte offset.
+if [ "${ASTRODRIVE_STAGED:-0}" != "1" ]; then
+  STAGE_DIR="/run/astrodrive-updater"
+  mkdir -p "${STAGE_DIR}"
+  chmod 0700 "${STAGE_DIR}"
+  cp -f "${BASH_SOURCE[0]}" "${STAGE_DIR}/update_software.sh"
+  if [ -f "${SCRIPT_DIR}/onstep_common.py" ]; then
+    cp -f "${SCRIPT_DIR}/onstep_common.py" "${STAGE_DIR}/onstep_common.py"
+  fi
+  chmod 0700 "${STAGE_DIR}/update_software.sh"
+  exec env ASTRODRIVE_STAGED=1 "${STAGE_DIR}/update_software.sh" "$@"
+fi
 
 FORCE="false"
 CHECK_ONLY="false"
@@ -13,31 +33,27 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMMON_PY="${SCRIPT_DIR}/onstep_common.py"
 CONFIG_FILE="/etc/onstep-autoprovision/config.env"
 META_FILE="/etc/onstep-autoprovision/install-meta.env"
 STATE_DIR="/var/lib/onstep-autoprovision"
 STATE_FILE="${STATE_DIR}/software-update.json"
+SNAPSHOT_FILE="${STATE_DIR}/rollback-snapshot.tar.gz"
 LOCK_FILE="/run/lock/onstep-provision.lock"
 
-if [ -f "${CONFIG_FILE}" ]; then
-  # shellcheck disable=SC1090
-  source "${CONFIG_FILE}"
-fi
-if [ -f "${META_FILE}" ]; then
-  # shellcheck disable=SC1090
-  source "${META_FILE}"
-fi
+# R1: Never `source` config.env or install-meta.env in a root shell!
+get_cfg() {
+  python3 "${COMMON_PY}" get-config "$1" "$2" "${3:-}" 2>/dev/null || printf '%s' "${3:-}"
+}
 
-AUTO_UPDATE_SOFTWARE="${AUTO_UPDATE_SOFTWARE:-true}"
-GITHUB_REPO="${GITHUB_REPO:-0denko/AstroDrive}"
-SRC_DIR="${ASTRODRIVE_SRC_DIR:-/opt/astrodrive-src}"
-INSTALLED_COMMIT="${INSTALLED_COMMIT:-}"
-INSTALLED_VERSION="${INSTALLED_VERSION:-unknown}"
-INSTALL_WITH_ARDUINO_CLI="${INSTALL_WITH_ARDUINO_CLI:-false}"
-INSTALL_ENABLE_AUTO_FLASH="${INSTALL_ENABLE_AUTO_FLASH:-false}"
-INSTALL_WITH_CAMERA="${INSTALL_WITH_CAMERA:-true}"
+AUTO_UPDATE_SOFTWARE="$(get_cfg "${CONFIG_FILE}" AUTO_UPDATE_SOFTWARE true)"
+GITHUB_REPO="$(get_cfg "${CONFIG_FILE}" GITHUB_REPO 0denko/AstroDrive)"
+SRC_DIR="$(get_cfg "${META_FILE}" ASTRODRIVE_SRC_DIR /opt/astrodrive-src)"
+INSTALLED_COMMIT="$(get_cfg "${META_FILE}" INSTALLED_COMMIT "")"
+INSTALLED_VERSION="$(get_cfg "${META_FILE}" INSTALLED_VERSION unknown)"
+INSTALL_WITH_ARDUINO_CLI="$(get_cfg "${META_FILE}" INSTALL_WITH_ARDUINO_CLI false)"
+INSTALL_ENABLE_AUTO_FLASH="$(get_cfg "${META_FILE}" INSTALL_ENABLE_AUTO_FLASH false)"
+INSTALL_WITH_CAMERA="$(get_cfg "${META_FILE}" INSTALL_WITH_CAMERA true)"
 
 write_state() {
   local status="$1"
@@ -91,25 +107,55 @@ if [ "${CHECK_ONLY}" = "true" ]; then
   exit 0
 fi
 
-# Safety gate (#12): defer if INDI is active (via shared onstep_common.py) or if flashing holds lock
+# Safety gate: defer if INDI is active or if flashing/install holds the provision lock
 if python3 "${COMMON_PY}" indi-active; then
   echo "[INFO] Active INDI telescope session detected; deferring software update until next cycle."
   write_state "deferred_busy" "Update available (${REMOTE_SHORT}), deferred while INDI session is active." "${REMOTE_SHA}"
   exit 0
 fi
 
-mkdir -p "$(dirname "${LOCK_FILE}")"
+mkdir -p "$(dirname "${LOCK_FILE}")" "${STATE_DIR}"
 exec 9>"${LOCK_FILE}"
 if ! flock -n 9; then
-  echo "[INFO] Provisioning/flashing is in progress; deferring software update until next cycle."
-  write_state "deferred_busy" "Update available (${REMOTE_SHORT}), deferred while flashing is in progress." "${REMOTE_SHA}"
+  echo "[INFO] Provisioning/flashing/install is in progress; deferring software update until next cycle."
+  write_state "deferred_busy" "Update available (${REMOTE_SHORT}), deferred while another operation is active." "${REMOTE_SHA}"
   exit 0
 fi
 
-# #10: Record previous commit before fetching so we can roll back cleanly if install.sh fails
+# R3: Snapshot the currently installed tree + keep a local backup of ${SRC_DIR} so rollback
+# restores exact files without needing `git fetch origin <arbitrary-SHA>` over the network.
 PREV_SHA=""
 if [ -d "${SRC_DIR}/.git" ]; then
   PREV_SHA="$(git -C "${SRC_DIR}" rev-parse HEAD 2>/dev/null || true)"
+fi
+
+SNAPSHOT_PATHS=()
+for p in \
+  /opt/onstep-autoprovision/scripts \
+  /opt/onstep-autoprovision/webui \
+  /opt/onstep-autoprovision/firmware-src \
+  /opt/onstep-autoprovision/VERSION \
+  /opt/onstep-autoprovision/requirements.txt \
+  /etc/onstep-autoprovision/install-meta.env \
+  /etc/udev/rules.d/99-onstep-*.rules \
+  /etc/systemd/system/onstep-*.service \
+  /etc/systemd/system/onstep-*.timer \
+  /etc/systemd/system/astrodrive-update.service \
+  /etc/systemd/system/astrodrive-update.timer; do
+  if [ -e "${p}" ]; then
+    SNAPSHOT_PATHS+=("${p#/}")
+  fi
+done
+
+if [ "${#SNAPSHOT_PATHS[@]}" -gt 0 ]; then
+  echo "==> Creating pre-update rollback snapshot (${SNAPSHOT_FILE})..."
+  tar -czf "${SNAPSHOT_FILE}.tmp" -C / "${SNAPSHOT_PATHS[@]}" 2>/dev/null && mv -f "${SNAPSHOT_FILE}.tmp" "${SNAPSHOT_FILE}" || rm -f "${SNAPSHOT_FILE}.tmp"
+fi
+
+SRC_BACKUP="${SRC_DIR}.prev"
+rm -rf "${SRC_BACKUP}"
+if [ -d "${SRC_DIR}" ]; then
+  cp -a "${SRC_DIR}" "${SRC_BACKUP}" || true
 fi
 
 echo "==> Updating AstroDrive software (${INSTALLED_COMMIT:0:7} -> ${REMOTE_SHORT})..."
@@ -118,6 +164,7 @@ if [ -d "${SRC_DIR}/.git" ]; then
   git -C "${SRC_DIR}" remote set-url origin "${REPO_URL}"
   if ! (git -C "${SRC_DIR}" fetch --depth 1 origin main && git -C "${SRC_DIR}" reset --hard origin/main); then
     echo "[ERROR] Failed to fetch AstroDrive update from ${REPO_URL}." >&2
+    rm -rf "${SRC_BACKUP}"
     write_state "error" "Git fetch failed for ${GITHUB_REPO}." "${REMOTE_SHA}"
     exit 1
   fi
@@ -125,12 +172,15 @@ else
   rm -rf "${SRC_DIR}"
   if ! git clone --depth 1 "${REPO_URL}" "${SRC_DIR}"; then
     echo "[ERROR] Failed to clone ${REPO_URL}." >&2
+    if [ -d "${SRC_BACKUP}" ]; then
+      mv -f "${SRC_BACKUP}" "${SRC_DIR}" || true
+    fi
     write_state "error" "Git clone failed for ${GITHUB_REPO}." "${REMOTE_SHA}"
     exit 1
   fi
 fi
 
-INSTALL_ARGS=(--github-repo "${GITHUB_REPO}" --skip-udev-trigger)
+INSTALL_ARGS=(--github-repo "${GITHUB_REPO}" --skip-udev-trigger --lock-held)
 if [ "${INSTALL_WITH_ARDUINO_CLI}" = "true" ]; then
   INSTALL_ARGS+=(--with-arduino-cli)
 fi
@@ -143,24 +193,34 @@ fi
 
 chmod +x "${SRC_DIR}/install.sh"
 if "${SRC_DIR}/install.sh" "${INSTALL_ARGS[@]}"; then
+  rm -rf "${SRC_BACKUP}"
   NEW_VER="$(tr -d '[:space:]' < "${SRC_DIR}/VERSION" 2>/dev/null || echo "${INSTALLED_VERSION}")"
   INSTALLED_VERSION="${NEW_VER}"
   INSTALLED_COMMIT="${REMOTE_SHA}"
   echo "==> AstroDrive software updated to v${NEW_VER} (${REMOTE_SHORT})."
   write_state "updated" "Updated to v${NEW_VER} (${REMOTE_SHORT})." "${REMOTE_SHA}"
 else
-  echo "[ERROR] install.sh failed on ${REMOTE_SHORT}; attempting rollback..." >&2
-  if [ -n "${PREV_SHA}" ] && [ -d "${SRC_DIR}/.git" ]; then
-    if git -C "${SRC_DIR}" fetch --depth 1 origin "${PREV_SHA}" >/dev/null 2>&1 || git -C "${SRC_DIR}" cat-file -e "${PREV_SHA}^{commit}" 2>/dev/null; then
-      git -C "${SRC_DIR}" reset --hard "${PREV_SHA}" || true
-      chmod +x "${SRC_DIR}/install.sh" 2>/dev/null || true
-      if "${SRC_DIR}/install.sh" "${INSTALL_ARGS[@]}"; then
-        echo "==> Rollback to ${PREV_SHA:0:7} succeeded."
-        write_state "error" "Update to ${REMOTE_SHORT} failed and rolled back cleanly to ${PREV_SHA:0:7}." "${REMOTE_SHA}"
-        exit 1
-      fi
+  echo "[ERROR] install.sh failed on ${REMOTE_SHORT}; restoring pre-update snapshot..." >&2
+  ROLLBACK_OK="false"
+  if [ -f "${SNAPSHOT_FILE}" ]; then
+    if tar -xzf "${SNAPSHOT_FILE}" -C /; then
+      ROLLBACK_OK="true"
     fi
   fi
-  write_state "error" "Self-update to ${REMOTE_SHORT} failed (check journalctl -u astrodrive-update)." "${REMOTE_SHA}"
+  if [ -d "${SRC_BACKUP}" ]; then
+    rm -rf "${SRC_DIR}"
+    mv -f "${SRC_BACKUP}" "${SRC_DIR}" || true
+  fi
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl restart onstep-webui.service >/dev/null 2>&1 || true
+  if [ "${INSTALL_WITH_CAMERA}" != "false" ]; then
+    systemctl restart onstep-camera.service >/dev/null 2>&1 || true
+  fi
+  if [ "${ROLLBACK_OK}" = "true" ]; then
+    echo "==> Restored previous installed tree (${PREV_SHA:0:7}) from snapshot."
+    write_state "error" "Update to ${REMOTE_SHORT} failed and restored previous installed tree (${PREV_SHA:0:7})." "${REMOTE_SHA}"
+  else
+    write_state "error" "Self-update to ${REMOTE_SHORT} failed (check journalctl -u astrodrive-update)." "${REMOTE_SHA}"
+  fi
   exit 1
 fi

@@ -648,29 +648,41 @@
       }[c]));
     }
 
-    // M1 #2: Capture #token=... hash fragment (never logged by Nginx!) or ?token=... fallback
+    // M1 + R8: Capture ONLY #token=... hash fragment (never ?token= query string) and exchange
+    // the Setup PIN for a 12h session token kept in sessionStorage (not persistent localStorage).
     function initTokenFromUrl() {
       let urlTok = '';
       const hash = window.location.hash || '';
       const hashMatch = hash.match(/(?:^#|&)token=([^&]+)/);
       if (hashMatch) {
         urlTok = decodeURIComponent(hashMatch[1]).trim();
+        window.history.replaceState({}, '', window.location.pathname + window.location.search);
       }
-      const params = new URLSearchParams(window.location.search);
-      if (!urlTok && params.get('token')) {
-        urlTok = params.get('token').trim();
-      }
+      // Clear any legacy persistent localStorage PIN from older versions
+      localStorage.removeItem('astrodrive_token');
       if (urlTok) {
-        localStorage.setItem('astrodrive_token', urlTok);
-        params.delete('token');
-        const cleanUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
-        window.history.replaceState({}, '', cleanUrl);
+        sessionStorage.setItem('astrodrive_token', urlTok);
+        exchangePinForSession(urlTok);
       }
       updateAuthBarVisibility();
     }
 
+    async function exchangePinForSession(pin) {
+      try {
+        const res = await fetch(`${API_BASE}/api/auth/verify`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-AstroDrive-Token': pin },
+          body: '{}',
+        });
+        const data = await res.json();
+        if (res.ok && data && data.session_token) {
+          sessionStorage.setItem('astrodrive_token', data.session_token);
+        }
+      } catch (_) {}
+    }
+
     function getToken() {
-      return (localStorage.getItem('astrodrive_token') || '').trim();
+      return (sessionStorage.getItem('astrodrive_token') || '').trim();
     }
 
     function updateAuthBarVisibility(forceShow = false) {
@@ -993,20 +1005,23 @@
       }
     }
 
-    // PIN Unlock
+    // PIN Unlock (R8: exchange Setup PIN for 12h session token in sessionStorage)
     $('pinUnlockBtn').addEventListener('click', async () => {
       const pin = $('pinInput').value.trim();
       if (!pin) return;
-      localStorage.setItem('astrodrive_token', pin);
+      sessionStorage.setItem('astrodrive_token', pin);
       setMsg('authMsg', 'Verifying Setup PIN…');
       const res = await api('/api/auth/verify', { method: 'POST', body: '{}' });
       if (res.ok) {
+        if (res.data && res.data.session_token) {
+          sessionStorage.setItem('astrodrive_token', res.data.session_token);
+        }
         $('pinInput').value = '';
         setMsg('authMsg', '');
         updateAuthBarVisibility(false);
         refreshAll(false);
       } else {
-        localStorage.removeItem('astrodrive_token');
+        sessionStorage.removeItem('astrodrive_token');
         setMsg('authMsg', res.data.error || 'Incorrect Setup PIN.', 'err');
       }
     });

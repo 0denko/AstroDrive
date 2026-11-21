@@ -44,16 +44,16 @@ No manual firmware compiling, no config file editing, and no memorizing Linux co
 curl -fsSL https://raw.githubusercontent.com/0denko/AstroDrive/main/setup.sh | sudo bash
 ```
 
-3. Wait **3–5 minutes** until you see **`AstroDrive is installed and ready!`** *(if the Pi has no internet yet, it will clearly warn that firmware wasn't downloaded and tell you how to retry)*.
-   - This automatically installs AstroDrive, the USB webcam & EAA live-stacking service, downloads the latest CI-built OnStepX firmware for both ESP32 and NodeMCU (SHA-256 checked against the release manifest), pre-configures KStars/Ekos (`LX200 OnStep` on `/dev/onstep` at `9600` baud), enables safe daily background updates (opt-out), and prints your personal **Setup Wizard link** (which includes your Setup PIN).
+3. Wait **~5–10 minutes on a Pi 3B** (faster on Pi 4/5, or ~2–3 minutes with `--without-camera`) until you see **`AstroDrive is installed and ready!`** *(if the Pi has no internet yet, it will clearly warn that firmware wasn't downloaded and tell you how to retry)*.
+   - This automatically installs AstroDrive, the USB webcam & EAA live-stacking service (`v4l-utils`, `python3-opencv`, `python3-numpy`), downloads the latest CI-built OnStepX firmware for both ESP32 and NodeMCU (SHA-256 checked against the release manifest), pre-configures KStars/Ekos (`LX200 OnStep` on `/dev/onstep` at `9600` baud), enables safe daily background updates (opt-out), and prints your personal **Setup Wizard link** (which includes your Setup PIN).
    - You can close the Terminal after copying or clicking the link!
 
 ---
 
 ### Step 4 — Click Through the Setup Wizard in Your Browser
 
-1. Open the **Setup Wizard link** printed at the end of Step 3 (`http://astroberry.local/onstep/#token=...`, or `http://<pi-hostname>.local:8090/#token=...` — the `#token` fragment stays inside your browser and is never written to server logs).
-   - *(If you open `http://astroberry.local` later without the link, click **`AstroDrive Setup`** in the bottom-right corner and paste the Setup PIN from `/etc/onstep-autoprovision/webui.token` once.)*
+1. Open the **Setup Wizard link** printed at the end of Step 3 (`http://astroberry.local/onstep/#token=...`, or `http://<pi-hostname>.local:8090/#token=...` — the `#token` fragment stays inside your browser, is never written to server logs, and is immediately exchanged for a 12-hour browser session token).
+   - *(Note: The Web UI runs over local LAN HTTP, so your Setup PIN is a full-control credential on your local network — always use a strong, unique password for your field Wi-Fi hotspot in Step 2. If you open `http://astroberry.local` later without the link, click **`AstroDrive Setup`** in the bottom-right corner and paste the Setup PIN from `/etc/onstep-autoprovision/webui.token` once.)*
 2. Click **Next →** through the 5 guided screens:
 
 | Screen | What You Do |

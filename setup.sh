@@ -51,6 +51,7 @@ fi
 echo "==> [2/4] Downloading AstroDrive..."
 if [ -d "${SRC_DIR}/.git" ]; then
   echo "==> Updating existing ${SRC_DIR} to latest origin/main (any local edits in ${SRC_DIR} will be discarded)..."
+  git -C "${SRC_DIR}" remote set-url origin "${REPO_URL}"
   git -C "${SRC_DIR}" fetch --depth 1 origin main
   git -C "${SRC_DIR}" reset --hard origin/main
 else

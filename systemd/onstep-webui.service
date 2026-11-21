@@ -15,15 +15,15 @@ StandardError=journal
 SyslogIdentifier=onstep-webui
 SupplementaryGroups=dialout
 
-# Security hardening (M1): strict filesystem confinement while permitting config/state/INDI writes
+# Security hardening (M1 + R7): strict filesystem confinement scoped to config/state/INDI/NM only
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectKernelTunables=yes
 ProtectControlGroups=yes
 RestrictNamespaces=yes
 ProtectSystem=strict
-ReadWritePaths=/etc/onstep-autoprovision /var/lib/onstep-autoprovision /opt/onstep-autoprovision/firmware /home /run/lock
-CapabilityBoundingSet=CAP_SYS_TIME CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_SETUID CAP_SETGID
+ReadWritePaths=/etc/onstep-autoprovision /var/lib/onstep-autoprovision /opt/onstep-autoprovision/firmware /run/lock -/home/astroberry/.indi -/home/pi/.indi -/etc/NetworkManager/system-connections
+CapabilityBoundingSet=CAP_SYS_TIME CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE
 AmbientCapabilities=
 MemoryDenyWriteExecute=no
 

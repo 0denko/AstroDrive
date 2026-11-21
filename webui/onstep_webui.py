@@ -46,6 +46,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 from onstep_common import (  # noqa: E402
     find_device_holders,
     get_udev_properties,
+    is_safe_usb_id,
     parse_env_file,
     read_json_file,
     write_config_keys,
@@ -60,6 +61,7 @@ STATE_DIR = Path(os.environ.get("ONSTEP_STATE_DIR", "/var/lib/onstep-autoprovisi
 FIRMWARE_DIR = Path(os.environ.get("FIRMWARE_DIR", "/opt/onstep-autoprovision/firmware"))
 SYMLINK_PATH = Path(os.environ.get("SYMLINK_PATH", "/dev/onstep"))
 CAMERA_PREVIEW_FILE = Path(os.environ.get("CAMERA_PREVIEW_FILE", "/run/onstep-camera/preview.jpg"))
+CAMERA_STATUS_FILE = Path(os.environ.get("CAMERA_STATUS_FILE", "/run/onstep-camera/camera-status.json"))
 UPDATE_SCRIPT = Path(os.environ.get("UPDATE_SCRIPT", str(SCRIPTS_DIR / "update_firmware.sh")))
 SOFTWARE_UPDATE_SCRIPT = Path(os.environ.get("SOFTWARE_UPDATE_SCRIPT", str(SCRIPTS_DIR / "update_software.sh")))
 HOTSPOT_SCRIPT = Path(os.environ.get("HOTSPOT_SCRIPT", str(SCRIPTS_DIR / "setup_hotspot.sh")))
@@ -98,7 +100,7 @@ ALLOWED_V4L2_CONTROLS = {
     "saturation",
     "sharpness",
 }
-CAPTURE_FILE_RE = re.compile(r"^astrodrive-[0-9]{8}-[0-9]{6}\.(png|json)$")
+CAPTURE_FILE_RE = re.compile(r"^astrodrive-[0-9]{8}-[0-9]{6}(?:-[0-9]{3})?\.(png|json)$")
 
 # M1: GITHUB_REPO is deliberately NOT mutable via HTTP!
 ALLOWED_CONFIG_KEYS = {
@@ -114,9 +116,42 @@ ALLOWED_CONFIG_KEYS = {
 
 CONFIG_LOCK = threading.Lock()
 STATUS_CACHE_LOCK = threading.Lock()
+SESSION_LOCK = threading.Lock()
 STATUS_CACHE_TTL_SEC = float(os.environ.get("WEBUI_STATUS_CACHE_TTL", "4.0"))
+SESSION_TTL_SEC = int(os.environ.get("WEBUI_SESSION_TTL_SEC", "43200"))  # 12 hours
 _STATUS_CACHE: tuple[float, dict[str, Any]] | None = None
 _EPHEMERAL_TOKEN: str | None = None
+_SESSIONS: dict[str, float] = {}
+
+
+def issue_session_token() -> tuple[str, int]:
+    """Issue a short-lived (12h) session token so browsers don't store the static PIN permanently (R8)."""
+    now = time.monotonic()
+    tok = "sess_" + secrets.token_hex(24)
+    with SESSION_LOCK:
+        # Prune expired tokens & cap max active sessions at 64
+        expired = [k for k, exp in _SESSIONS.items() if exp <= now]
+        for k in expired:
+            _SESSIONS.pop(k, None)
+        if len(_SESSIONS) >= 64:
+            oldest = min(_SESSIONS, key=_SESSIONS.get)  # type: ignore[arg-type]
+            _SESSIONS.pop(oldest, None)
+        _SESSIONS[tok] = now + SESSION_TTL_SEC
+    return tok, SESSION_TTL_SEC
+
+
+def is_valid_session_token(provided: str) -> bool:
+    if not provided.startswith("sess_"):
+        return False
+    now = time.monotonic()
+    with SESSION_LOCK:
+        for tok, exp in list(_SESSIONS.items()):
+            if exp <= now:
+                _SESSIONS.pop(tok, None)
+                continue
+            if hmac.compare_digest(provided, tok):
+                return True
+    return False
 
 
 def invalidate_status_cache() -> None:
@@ -189,28 +224,34 @@ def update_config_env(updates: dict[str, str]) -> dict[str, str]:
 
 
 def remember_usb_device(device: str) -> str:
-    """Record a specific board's USB serial or physical USB path into config.env allowlist."""
+    """Record a validated board USB serial or physical USB path into config.env allowlist (R1)."""
     props = get_udev_properties(device)
     serial_short = props.get("ID_SERIAL_SHORT", "").strip()
     id_path = props.get("ID_PATH", "").strip()
     cfg = read_config_env()
 
     if serial_short and serial_short.lower() not in {"0001", "0000", "1234"}:
-        cur = [x.strip() for x in cfg.get("ALLOWED_USB_SERIALS", "").split(",") if x.strip()]
-        if serial_short not in cur:
-            cur.append(serial_short)
-            with CONFIG_LOCK:
-                write_config_keys(CONFIG_FILE, {"ALLOWED_USB_SERIALS": ",".join(cur)})
-            invalidate_status_cache()
-        return f"USB serial {serial_short}"
+        if not is_safe_usb_id(serial_short):
+            LOG.warning("Ignoring unsafe USB serial from udev on %s: %r", device, serial_short)
+        else:
+            cur = [x.strip() for x in cfg.get("ALLOWED_USB_SERIALS", "").split(",") if x.strip() and is_safe_usb_id(x)]
+            if serial_short not in cur:
+                cur.append(serial_short)
+                with CONFIG_LOCK:
+                    write_config_keys(CONFIG_FILE, {"ALLOWED_USB_SERIALS": ",".join(cur)})
+                invalidate_status_cache()
+            return f"USB serial {serial_short}"
     if id_path:
-        cur = [x.strip() for x in cfg.get("ALLOWED_USB_PATHS", "").split(",") if x.strip()]
-        if id_path not in cur:
-            cur.append(id_path)
-            with CONFIG_LOCK:
-                write_config_keys(CONFIG_FILE, {"ALLOWED_USB_PATHS": ",".join(cur)})
-            invalidate_status_cache()
-        return f"USB port {id_path}"
+        if not is_safe_usb_id(id_path):
+            LOG.warning("Ignoring unsafe USB ID_PATH from udev on %s: %r", device, id_path)
+        else:
+            cur = [x.strip() for x in cfg.get("ALLOWED_USB_PATHS", "").split(",") if x.strip() and is_safe_usb_id(x)]
+            if id_path not in cur:
+                cur.append(id_path)
+                with CONFIG_LOCK:
+                    write_config_keys(CONFIG_FILE, {"ALLOWED_USB_PATHS": ",".join(cur)})
+                invalidate_status_cache()
+            return f"USB port {id_path}"
     return ""
 
 
@@ -411,7 +452,7 @@ def read_network_status() -> dict[str, Any]:
 def read_camera_status(cfg: dict[str, str]) -> dict[str, Any]:
     """Read camera daemon status & saved captures summary (authenticated status only)."""
     enabled = cfg.get("CAMERA_ENABLED", "false") == "true"
-    st = read_json_file(STATE_DIR / "camera-status.json")
+    st = read_json_file(CAMERA_STATUS_FILE) or read_json_file(STATE_DIR / "camera-status.json")
     if not st:
         st = {
             "enabled": enabled,
@@ -736,10 +777,18 @@ class OnStepWebUIHandler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length)
         return json.loads(raw.decode("utf-8"))
 
+    def setup(self) -> None:
+        self.timeout = 15.0
+        super().setup()
+
     def _is_authenticated(self) -> bool:
         provided = (self.headers.get("X-AstroDrive-Token") or "").strip()
+        if not provided:
+            return False
+        if is_valid_session_token(provided):
+            return True
         expected, _ = get_expected_token()
-        return bool(provided) and hmac.compare_digest(provided, expected)
+        return hmac.compare_digest(provided, expected)
 
     def _require_auth(self) -> bool:
         if self._is_authenticated():
@@ -835,7 +884,13 @@ class OnStepWebUIHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/auth/verify":
-            self._send_json({"ok": True, "message": "Setup PIN verified."})
+            sess_tok, ttl = issue_session_token()
+            self._send_json({
+                "ok": True,
+                "session_token": sess_tok,
+                "expires_in_sec": ttl,
+                "message": "Setup PIN verified (12h session issued).",
+            })
             return
 
         if path == "/api/config":
@@ -966,11 +1021,14 @@ class OnStepWebUIHandler(BaseHTTPRequestHandler):
                 if home_ssid and len(home_pass) < 8:
                     raise ValueError("Home Wi-Fi Password must be at least 8 characters.")
 
-                cmd = [str(HOTSPOT_SCRIPT), "--ap-ssid", ap_ssid, "--ap-pass", ap_pass]
+                cmd = [str(HOTSPOT_SCRIPT), "--ap-ssid", ap_ssid]
+                sub_env = os.environ.copy()
+                sub_env["ASTRODRIVE_AP_PASS"] = ap_pass
                 if home_ssid:
-                    cmd.extend(["--home-ssid", home_ssid, "--home-pass", home_pass])
+                    cmd.extend(["--home-ssid", home_ssid])
+                    sub_env["ASTRODRIVE_HOME_PASS"] = home_pass
 
-                res = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+                res = subprocess.run(cmd, capture_output=True, text=True, env=sub_env, timeout=20)
                 if res.returncode != 0:
                     err_msg = (res.stderr or res.stdout or "Failed to configure Wi-Fi/Hotspot").strip()
                     self._send_json({"ok": False, "error": err_msg}, HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -1057,11 +1115,37 @@ class OnStepWebUIHandler(BaseHTTPRequestHandler):
         self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
 
+class HardenedHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer with a bounded concurrent-connection cap for 1 GB Pi 3B."""
+
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def __init__(self, server_address: tuple[str, int], handler_cls: type[BaseHTTPRequestHandler], max_conns: int = 32) -> None:
+        self._conn_sem = threading.BoundedSemaphore(max_conns)
+        super().__init__(server_address, handler_cls)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        if not self._conn_sem.acquire(blocking=False):
+            try:
+                request.close()
+            except OSError:
+                pass
+            return
+        super().process_request(request, client_address)
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._conn_sem.release()
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     host = os.environ.get("WEBUI_HOST", "0.0.0.0")
     port = int(os.environ.get("WEBUI_PORT", "8090"))
-    httpd = ThreadingHTTPServer((host, port), OnStepWebUIHandler)
+    httpd = HardenedHTTPServer((host, port), OnStepWebUIHandler)
     LOG.info("AstroDrive Web UI & Setup Wizard listening on http://%s:%d/onstep/", host, port)
     try:
         httpd.serve_forever()
