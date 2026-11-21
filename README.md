@@ -9,42 +9,45 @@ Turn a **Raspberry Pi** + **ESP32-WROOM** (or **NodeMCU ESP8266**) + **2× silen
 No manual firmware compiling, no config file editing, and no memorizing Linux commands. After pasting **one** install line, everything else is **Next → Next → Done** in your browser.
 
 ### What You Need
-- **Raspberry Pi 4 or 5** + **≥ 16 GB microSD card** + good **5.1 V / 2.5 A+** Pi power supply
+- **Raspberry Pi 3B, 4, or 5** + **≥ 16 GB microSD card** + good **5.1 V / 2.5 A+** Pi power supply
 - **ESP32-WROOM** *(recommended)* or **NodeMCU ESP8266** + a short **data USB cable**
 - **2× TMC2208** stepper drivers, **2× stepper motors** (`36H20HM` / `36H18HM`), **12 V ≥ 4 A** power supply + **4 A fuse**, **2× 100 µF** capacitors, **2× 10 kΩ** resistors, and a multimeter
+- *(Optional)* **USB UVC webcam** (e.g., disassembled Logitech USB webcam) for live camera preview & EAA stacking
 
 ---
 
 ### Step 1 — Flash the microSD Card
 
-1. Download **Astroberry OS** (`astroberryos_3.2_debian-trixie-arm64.img.xz`) from **[astroberry.io/download](https://astroberry.io/download/)**.
-2. Open **[Raspberry Pi Imager](https://www.raspberrypi.com/software/)** on your computer.
-3. Click **Choose Device** → pick your Raspberry Pi model.
-4. Click **Choose OS** → scroll down to **Use custom** → pick the file you just downloaded.
-5. Click **Choose Storage** → pick your microSD card → click **Next**.
-6. When it asks *"Would you like to apply OS customisation settings?"*, click **No** (Astroberry sets itself up automatically).
-7. Wait for it to finish, then eject the card.
+- **On Raspberry Pi 4 or 5 (Astroberry OS):**
+  1. Download **Astroberry OS** (`astroberryos_3.2_debian-trixie-arm64.img.xz`) from **[astroberry.io/download](https://astroberry.io/download/)**.
+  2. Open **[Raspberry Pi Imager](https://www.raspberrypi.com/software/)**, pick your Pi model, pick **Use custom** → the file you downloaded, pick your microSD card, click **Next**, and click **No** to OS customisation (Astroberry sets itself up automatically).
+- **On Raspberry Pi 3 Model B (Raspberry Pi OS 64-bit):**
+  1. Open **[Raspberry Pi Imager](https://www.raspberrypi.com/software/)**, choose **Raspberry Pi 3**, choose **Raspberry Pi OS (64-bit)**, and pick your microSD card.
+  2. Click **Next** → **Edit Settings** to enter your **home Wi-Fi** and enable **SSH**, then flash and eject the card.
 
 ---
 
 ### Step 2 — Turn On the Pi & Connect to Home Wi-Fi
 
 1. Insert the microSD card into the Raspberry Pi and plug in its power. Wait **2 minutes**.
-2. On your laptop or phone, join the Wi-Fi network **`astroberry`** (password: **`astroberry`**) — or plug an Ethernet cable into your router.
-3. Open your web browser and go to **`http://astroberry.local`**.
-4. Log in with username **`astroberry`** and password **`astroberry`**.
-5. Follow Astroberry's short welcome screen to pick your **country**, **location**, and connect the Pi to your **home Wi-Fi** (so it has internet access).
+2. **Astroberry OS (Pi 4/5):** join Wi-Fi **`astroberry`** (password **`astroberry`**), open **`http://astroberry.local`** (login **`astroberry`** / **`astroberry`**), and follow its short welcome screen to join your **home Wi-Fi**.
+3. **Raspberry Pi OS (Pi 3B):** your Pi joins your home Wi-Fi automatically using the settings from Step 1.
 
 ---
 
 ### Step 3 — Install AstroDrive (One Command)
 
-1. Inside `http://astroberry.local`, open the **Terminal** (or SSH into `astroberry@astroberry.local`).
+1. Open the **Terminal** on the Pi (or SSH into it from your laptop).
 2. Copy and paste this single line, then press **Enter**:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/0denko/AstroDrive/main/setup.sh | sudo bash
 ```
+
+   *(Want built-in USB webcam live view & EAA live stacking too? Add `--with-camera`:)*
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/0denko/AstroDrive/main/setup.sh | sudo bash -s -- --with-camera
+   ```
 
 3. Wait **3–5 minutes** until you see **`AstroDrive is installed and ready!`** *(if the Pi has no internet yet, it will clearly warn that firmware wasn't downloaded and tell you how to retry)*.
    - This installs AstroDrive, downloads the latest CI-built OnStepX firmware for both ESP32 and NodeMCU (SHA-256 checked against the release manifest), pre-configures KStars/Ekos (`LX200 OnStep` on `/dev/onstep` at `9600` baud), enables safe daily background updates (opt-out), and prints your personal **Setup Wizard link** (which includes your Setup PIN).
@@ -54,19 +57,31 @@ curl -fsSL https://raw.githubusercontent.com/0denko/AstroDrive/main/setup.sh | s
 
 ### Step 4 — Click Through the Setup Wizard in Your Browser
 
-1. Open the **Setup Wizard link** printed at the end of Step 3 (`http://astroberry.local/onstep/#token=...`, or the direct fallback `http://astroberry.local:8090/#token=...` — the `#token` fragment stays inside your browser and is never written to server logs).
+1. Open the **Setup Wizard link** printed at the end of Step 3 (`http://astroberry.local/onstep/#token=...`, or `http://<pi-hostname>.local:8090/#token=...` — the `#token` fragment stays inside your browser and is never written to server logs).
    - *(If you open `http://astroberry.local` later without the link, click **`AstroDrive Setup`** in the bottom-right corner and paste the Setup PIN from `/etc/onstep-autoprovision/webui.token` once.)*
 2. Click **Next →** through the 5 guided screens:
 
 | Screen | What You Do |
 | :--- | :--- |
-| **1. System Check** | Confirm the green checkmarks (Pi power, downloaded firmware, Astroberry overlay, KStars/Ekos defaults, AstroDrive version). Fix any yellow/red item with one click, then click **Next**. |
+| **1. System Check** | Confirm the green checkmarks (Pi power, downloaded firmware, web UI / overlay, KStars/Ekos defaults, AstroDrive version). Fix any yellow/red item with one click, then click **Next**. |
 | **2. Wi-Fi & Field Hotspot** *(optional)* | Choose a hotspot name & password (8+ characters) if you want the Pi to create its own Wi-Fi out under dark skies, click **Save**, then **Next** (or skip). |
 | **3. Flash Board** | Plug your **bare** ESP32 or NodeMCU into any Pi USB port (no 12 V or motors yet). Click **⚡ Flash OnStepX to This Board** — wait ~30–60 seconds for the green **Controller Ready!** message, then click **Next**. *(Unrelated USB accessories are never overwritten automatically.)* |
 | **4. Wiring & Safety** | Unplug USB, pick your board to view the wiring picture right on screen, tick off the 6 safety checks (including setting `Vref ≈ 0.35 V` with motors unplugged), and turn on **12 V power before plugging USB back in**. Click **Next**. |
 | **5. Connect & Finish** | Open **KStars → Ekos**, pick **Mount: `LX200 OnStep`**, click **Start** → **Connect**, and test moving the motors on your desk before mounting them on the telescope! |
 
 > **Tip for dark-sky trips (no internet):** If you configured a field hotspot in Wizard Screen 2, join that hotspot on your phone when away from home Wi-Fi, open `http://10.42.0.1/onstep/` (or `http://10.42.0.1:8090/`), and tap **Sync Pi Clock from This Phone/Laptop** so your mount has the exact time.
+
+---
+
+## Optional: USB Camera & Live Stacking (EAA)
+
+If you installed with `--with-camera` (or re-run `sudo /opt/astrodrive-src/install.sh --with-camera`), plug any standard USB UVC webcam (such as a disassembled Logitech webcam) into the Pi and open the **Dashboard** tab in AstroDrive:
+
+1. Tap **🔒 Lock Auto Controls** to turn off auto-exposure, auto-gain, auto-white-balance, and autofocus.
+2. Adjust exposure/gain under **Webcam Hardware Controls (V4L2)** and tune the **Asinh EAA Stretch** slider.
+3. Choose **Dynamic Non-Tracking** (follows continuous drift & auto-resets if you bump the mount) or **Fixed Reference** (sigma-clipped deep stack with drift prompt), pick **Keep Best 25–100%** to reject blurry or cloudy frames automatically, and click **💾 Save PNG** to download your stacked image.
+
+*(Tuned for Raspberry Pi 3B at `640×480` YUYV in RAM/tmpfs with zero per-frame microSD wear, and automatically steps aside whenever INDI `indi_v4l2_ccd` is using the camera.)*
 
 ---
 
@@ -78,7 +93,8 @@ curl -fsSL https://raw.githubusercontent.com/0denko/AstroDrive/main/setup.sh | s
 | **Red "Low Raspberry Pi power" warning** | Power the Pi from its own dedicated **5.1 V / 2.5 A+** adapter (not a phone charger or thin USB cable). |
 | **Motor buzzes and gets warm instead of turning** | Power off and check the 4 motor wires — pair Coil 1 to `M1A`+`M1B` and Coil 2 to `M2A`+`M2B` (never pair the two middle `M2A`+`M1A` pins together). |
 | **Telescope moves twice as far as commanded** | Make sure both `MS1` and `MS2` on each TMC2208 are wired to `VIO` (3.3 V) for 1/16 microsteps. |
-| **Can't reach `http://astroberry.local`** | Try `http://astroberry.local:8090` (or `http://10.42.0.1:8090` when connected to the field hotspot). |
+| **Can't reach `http://astroberry.local`** | Try `http://<pi-hostname>.local:8090` (or `http://10.42.0.1:8090` when connected to the field hotspot). |
+| **USB camera says "held by INDI"** | Disconnect the `V4L2 CCD` driver in KStars/Ekos when using AstroDrive's built-in live stacker (only one program can own `/dev/video0` at a time). |
 
 ---
 
@@ -120,11 +136,12 @@ All pin assignments in both firmware profiles match [`HARDWARE.md`](HARDWARE.md)
 </details>
 
 <details>
-<summary><strong>How Auto-Provisioning Works (Architecture)</strong></summary>
+<summary><strong>How Auto-Provisioning &amp; Live Stacking Work (Architecture)</strong></summary>
 
 1. **`udev`** (`udev/99-onstep-nodemcu.rules`) detects CP2102 (`10c4:ea60`), CH340 (`1a86:7523`), CH9102 (`1a86:55d4`), and Espressif native USB-CDC (`303a:1001`) boards, creates per-device `/dev/onstep-raw-%k` symlinks, blocks `ModemManager` (`ID_MM_DEVICE_IGNORE=1`), and triggers `onstep-autoprovision@<dev>.service`.
 2. **`systemd` + Python** (`scripts/onstep_provision.py`) acquires an exclusive `flock`, verifies no active INDI session holds the port, probes LX200 `:GVP#` / `:GVN#` without DTR/RTS reset, and **atomically publishes `/dev/onstep`** for `indi_lx200_OnStep`. Blank boards are only flashed when explicitly authorized from the Setup Wizard (single-use ticket + USB allowlist recording) or when `AUTO_FLASH="true"` is intentionally enabled.
-3. **Authenticated Astroberry UI overlay & self-updates:** Nginx proxies `/onstep/` to `onstep-webui.service` (`127.0.0.1:8090`, hardened with `ProtectSystem=strict` and Setup PIN authentication via `/etc/onstep-autoprovision/webui.token` on all mutating routes) and injects `/onstep/overlay.js` via `sub_filter` with an APT post-invoke hook (`/etc/apt/apt.conf.d/99-onstep-nginx-overlay`). Daily timers (`onstep-firmware-update.timer` and `astrodrive-update.timer`, opt-out via `AUTO_UPDATE_SOFTWARE`) keep firmware cache and AstroDrive scripts current when online and idle.
+3. **Optional USB Camera & EAA Stacker** (`scripts/onstep_camera.py`, `systemd/onstep-camera.service`, `udev/99-onstep-camera.rules`) binds `/dev/astrocam`, captures uncompressed YUYV frames at `640×480` (Pi 3B baseline, `MemoryMax=350M`, `Nice=5`), grades sharpness (star FWHM / blurred-Laplacian + rolling Keep Best % + cloud collapse guard), aligns continuous drift via binned phase correlation (`dynamic_drift` or sigma-clipped `fixed_ref`), and writes display previews atomically to tmpfs (`/run/onstep-camera/preview.jpg`) served only over authenticated `X-AstroDrive-Token` endpoints.
+4. **Authenticated Web UI overlay & self-updates:** Nginx proxies `/onstep/` to `onstep-webui.service` (`127.0.0.1:8090`, hardened with `ProtectSystem=strict` and Setup PIN authentication via `/etc/onstep-autoprovision/webui.token` on all mutating and camera routes) and injects `/onstep/overlay.js` via `sub_filter` with an APT post-invoke hook (`/etc/apt/apt.conf.d/99-onstep-nginx-overlay`). Daily timers (`onstep-firmware-update.timer` and `astrodrive-update.timer`, opt-out via `AUTO_UPDATE_SOFTWARE`) keep firmware cache and AstroDrive scripts current when online and idle.
 
 ```mermaid
 flowchart LR
@@ -134,13 +151,15 @@ flowchart LR
         DRV["2× TMC2208S (1/16 StealthChop2)"]
         USB <--> FW --> DRV
     end
-    subgraph RPI["Raspberry Pi (Astroberry OS v3.2+)"]
-        UDEV["udev (/dev/onstep-raw-%k)"]
+    subgraph RPI["Raspberry Pi 3B / 4 / 5"]
+        UDEV["udev (/dev/onstep-raw-%k\n& /dev/astrocam)"]
         PROV["onstep_provision.py\n(probe + authorized flash)"]
+        CAM["onstep_camera.py\n(opt-in YUYV EAA stacker)"]
         LINK["/dev/onstep"]
         INDI["indi_lx200_OnStep @ 9600"]
-        UI["AstroDrive Setup Wizard\nhttp://astroberry.local/onstep/"]
+        UI["AstroDrive Setup Wizard & Dashboard\n:8090 / /onstep/"]
         UDEV --> PROV --> LINK --> INDI
+        UDEV --> CAM --> UI
         PROV -.-> UI
     end
     USB <==> UDEV
@@ -149,12 +168,15 @@ flowchart LR
 </details>
 
 <details>
-<summary><strong>Alternative Installs (Raspberry Pi 3B, Vanilla RPi OS, On-Pi Compiler, Pre-baked CI Image)</strong></summary>
+<summary><strong>Alternative Installs (On-Pi Compiler, Pre-baked CI Image)</strong></summary>
 
-- **Raspberry Pi 3B or vanilla Raspberry Pi OS 64-bit:** Flash 64-bit Raspberry Pi OS with Imager (enable SSH + Wi-Fi in OS Customisation), then run the same one-line `setup.sh` command. Open the Setup Wizard using the printed `http://<pi-hostname>.local:8090/#token=...` link.
 - **Enable on-Pi OnStepX compilation** (installs SHA-256-verified `arduino-cli v1.6.0`; only needed if you edit `Config.h` directly on the Pi):
   ```bash
   curl -fsSL https://raw.githubusercontent.com/0denko/AstroDrive/main/setup.sh | sudo bash -s -- --with-arduino-cli
+  ```
+- **Combine flags** (camera + on-Pi compiler):
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/0denko/AstroDrive/main/setup.sh | sudo bash -s -- --with-camera --with-arduino-cli
   ```
 - **Pre-baked downloadable `.img.xz`:** Run **Actions → Build Raspberry Pi Overlay Image (.img.xz) → Run workflow** in GitHub Actions to generate a ready-to-flash `.img.xz` with AstroDrive + firmware baked in.
 - **Automated Firmware Builds:** `.github/workflows/build-firmware.yml` compiles both `nodemcu-esp32-tmc2208s` (`esp32:esp32@2.0.17`) and `nodemcu-esp8266-tmc2208s` (`esp8266:esp8266@3.1.2` + `esp8266RfOff` plugin) against the pinned OnStepX commit in `firmware/onstepx.ref` and publishes `.bin` + SHA-256 manifests to [GitHub Releases](https://github.com/0denko/AstroDrive/releases/latest).
@@ -166,14 +188,16 @@ flowchart LR
 
 ```text
 AstroDrive/
+├── LICENSE                                # GNU GPLv3 (from v1.3.0 onward)
+├── CHANGELOG.md                           # Release notes & license history
 ├── VERSION                                # AstroDrive software version (used by self-updater)
 ├── setup.sh                               # One-line curl | sudo bash bootstrap installer
-├── install.sh                             # Idempotent RPi installer (--with-arduino-cli, --chroot)
+├── install.sh                             # Idempotent RPi installer (--with-camera, --with-arduino-cli, --chroot)
 ├── HARDWARE.md                            # Full motor, power, Vref, and wire-by-wire guide
 ├── docs/                                  # ESP32 & NodeMCU ESP8266 SVG wiring schematics
-├── .github/workflows/                     # Automated OnStepX firmware & Pi .img.xz builders
-├── webui/                                 # Token-authenticated Setup Wizard, Dashboard & Astroberry overlay (:8090)
-├── scripts/                               # Provisioner, INDI defaults, hotspot, firmware & software updaters
+├── .github/workflows/                     # Automated firmware builds, lint/smoke tests & Pi .img.xz builder
+├── webui/                                 # Token-authenticated Setup Wizard, EAA Dashboard & Astroberry overlay (:8090)
+├── scripts/                               # Provisioner, EAA camera daemon, INDI defaults, hotspot, updaters
 ├── systemd/ udev/ nginx/ config/          # Hardened units/timers, udev rules, Nginx overlay, config template
 └── firmware/                              # Pinned onstepx.ref + ESP32/ESP8266 TMC2208S OnStepX profiles
 ```
@@ -182,8 +206,8 @@ AstroDrive/
 # View your Setup Wizard PIN
 sudo cat /etc/onstep-autoprovision/webui.token
 
-# Watch live provisioning / flashing logs
-journalctl -fu 'onstep-autoprovision@*'
+# Watch live provisioning, camera, or update logs
+journalctl -fu 'onstep-autoprovision@*' -u onstep-camera.service
 
 # Non-resetting LX200 handshake check
 /opt/onstep-autoprovision/.venv/bin/python \
@@ -195,3 +219,10 @@ sudo /opt/onstep-autoprovision/scripts/update_software.sh --force
 ```
 
 </details>
+
+---
+
+## License
+
+AstroDrive is free and open-source software licensed under the **GNU General Public License v3.0 (GPLv3)** starting from `v1.3.0` onward — see [`LICENSE`](LICENSE) and [`CHANGELOG.md`](CHANGELOG.md) for details.
+

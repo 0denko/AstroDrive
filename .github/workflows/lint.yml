@@ -34,7 +34,14 @@ jobs:
             scripts/onstep_common.py \
             scripts/onstep_provision.py \
             scripts/probe_onstep.py \
-            webui/onstep_webui.py
+            scripts/onstep_camera.py \
+            webui/onstep_webui.py \
+            tests/test_camera_stacker.py
+
+      - name: EAA LiveStacker synthetic unit tests
+        run: |
+          python3 -m pip install --quiet numpy pillow
+          python3 tests/test_camera_stacker.py
 
       - name: JavaScript syntax check (overlay.js + index.html inline script)
         run: |
@@ -60,8 +67,13 @@ jobs:
               tok_file = td_p / "webui.token"
               tok_file.write_text(tok + "\n")
               cfg_file = td_p / "config.env"
-              cfg_file.write_text('AUTO_FLASH="false"\nGITHUB_REPO="0denko/AstroDrive"\n')
+              cfg_file.write_text('AUTO_FLASH="false"\nCAMERA_ENABLED="false"\nGITHUB_REPO="0denko/AstroDrive"\n')
               state_dir = td_p / "state"
+              captures_dir = state_dir / "captures"
+              captures_dir.mkdir(parents=True)
+              (captures_dir / "astrodrive-20261121-010203.png").write_bytes(b"\x89PNG\r\n\x1a\ntest")
+              preview_file = td_p / "preview.jpg"
+              preview_file.write_bytes(b"\xff\xd8\xff\xe0testjpg")
               fw_dir = td_p / "fw"
               fw_dir.mkdir()
 
@@ -72,27 +84,42 @@ jobs:
                   "ONSTEP_TOKEN_FILE": str(tok_file),
                   "ONSTEP_CONFIG_FILE": str(cfg_file),
                   "ONSTEP_STATE_DIR": str(state_dir),
+                  "CAMERA_PREVIEW_FILE": str(preview_file),
                   "FIRMWARE_DIR": str(fw_dir),
               })
               proc = subprocess.Popen([sys.executable, "webui/onstep_webui.py"], env=env)
               try:
                   time.sleep(0.8)
-                  # Unauthenticated GET /api/status must be redacted
+                  # Unauthenticated GET /api/status must be redacted (no config/camera/usb_devices/network)
                   with urllib.request.urlopen("http://127.0.0.1:18092/api/status", timeout=5) as r:
                       st = json.loads(r.read())
                       assert st["authenticated"] is False
-                      assert "config" not in st and "usb_devices" not in st and "network" not in st
+                      assert "config" not in st and "usb_devices" not in st and "network" not in st and "camera" not in st
 
-                  # Unauthenticated GET /api/logs and /api/status?probe=1 must return 401
-                  for path in ("/api/logs", "/api/status?probe=1"):
+                  # Unauthenticated GET /api/logs, /api/status?probe=1, and ALL camera GET routes must return 401
+                  for path in (
+                      "/api/logs",
+                      "/api/status?probe=1",
+                      "/api/camera/preview.jpg",
+                      "/api/camera/captures",
+                      "/api/camera/captures/astrodrive-20261121-010203.png",
+                  ):
                       try:
                           urllib.request.urlopen(f"http://127.0.0.1:18092{path}", timeout=5)
                           raise AssertionError(f"Expected 401 for unauthenticated GET {path}")
                       except urllib.error.HTTPError as e:
                           assert e.code == 401, (path, e.code)
 
-                  # Unauthenticated POSTs must return 401
-                  for path in ("/api/config", "/api/action/provision", "/api/action/update-cache", "/api/action/sync-time"):
+                  # Unauthenticated POSTs (mount + camera) must return 401
+                  for path in (
+                      "/api/config",
+                      "/api/action/provision",
+                      "/api/action/update-cache",
+                      "/api/action/sync-time",
+                      "/api/camera/config",
+                      "/api/camera/action/stack-reset",
+                      "/api/camera/action/lock-auto",
+                  ):
                       req = urllib.request.Request(
                           f"http://127.0.0.1:18092{path}",
                           data=b"{}",
@@ -105,22 +132,50 @@ jobs:
                       except urllib.error.HTTPError as e:
                           assert e.code == 401, (path, e.code)
 
-                  # Authenticated GET /api/status returns full payload
+                  # Authenticated GET /api/status returns full payload including camera
                   req = urllib.request.Request(
                       "http://127.0.0.1:18092/api/status",
                       headers={"X-AstroDrive-Token": tok},
                   )
                   with urllib.request.urlopen(req, timeout=5) as r:
                       st = json.loads(r.read())
-                      assert st["authenticated"] is True and "config" in st and "health" in st
+                      assert st["authenticated"] is True and "config" in st and "health" in st and "camera" in st
 
-                  # Authenticated GET /api/logs succeeds
+                  # Authenticated GET /api/logs & camera preview & captures succeed
+                  for path in ("/api/logs", "/api/camera/preview.jpg", "/api/camera/captures", "/api/camera/captures/astrodrive-20261121-010203.png"):
+                      req = urllib.request.Request(f"http://127.0.0.1:18092{path}", headers={"X-AstroDrive-Token": tok})
+                      with urllib.request.urlopen(req, timeout=5) as r:
+                          assert r.status == 200, (path, r.status)
+
+                  # Path traversal / invalid capture filenames must be rejected with 400
+                  for bad in ("/api/camera/captures/..%2F..%2Fetc%2Fpasswd", "/api/camera/captures/evil.png"):
+                      req = urllib.request.Request(f"http://127.0.0.1:18092{bad}", headers={"X-AstroDrive-Token": tok})
+                      try:
+                          urllib.request.urlopen(req, timeout=5)
+                          raise AssertionError(f"Expected 400 for {bad}")
+                      except urllib.error.HTTPError as e:
+                          assert e.code == 400, (bad, e.code)
+
+                  # Authenticated POST /api/camera/config & action succeed and write IPC files
                   req = urllib.request.Request(
-                      "http://127.0.0.1:18092/api/logs",
-                      headers={"X-AstroDrive-Token": tok},
+                      "http://127.0.0.1:18092/api/camera/config",
+                      data=json.dumps({"mode": "fixed_ref", "keep_pct": 25, "stretch_asinh": 6.5}).encode(),
+                      headers={"Content-Type": "application/json", "X-AstroDrive-Token": tok},
+                      method="POST",
                   )
                   with urllib.request.urlopen(req, timeout=5) as r:
                       assert r.status == 200
+                  assert (state_dir / "camera-cmd" / "config.json").is_file()
+
+                  req = urllib.request.Request(
+                      "http://127.0.0.1:18092/api/camera/action/lock-auto",
+                      data=b"{}",
+                      headers={"Content-Type": "application/json", "X-AstroDrive-Token": tok},
+                      method="POST",
+                  )
+                  with urllib.request.urlopen(req, timeout=5) as r:
+                      assert r.status == 200
+                  assert list((state_dir / "camera-cmd").glob("action-*.json"))
 
                   # GITHUB_REPO mutation must be rejected with 400
                   req = urllib.request.Request(

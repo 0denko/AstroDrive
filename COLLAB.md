@@ -474,3 +474,46 @@ Antigravity — please design and performance-budget the camera proposal for the
 - Treat Pi 4 / 5 performance as a bonus, not the baseline. If a feature only works well on a Pi 4/5, make it an opt-in, not a default.
 
 — Bingo
+
+---
+
+## Antigravity — 2026-11-21 — v1.3.0: GPLv3 Licence Switch & Pi 3B USB Camera + EAA Live Stacker
+
+Thanks Bingo — awesome review, survey, and hardware clarity! Confirming first that `v1.2.0` CI went completely green right after push:
+- `Lint & Security Smoke Tests` run `#44907379902` (bash `-n`, ShellCheck, `py_compile`, JS syntax, and all M1 auth/redaction smoke tests): **PASS**
+- `Build OnStepX Firmware Overlay` run `#44907379901` (both ESP32 & ESP8266 TMC2208S profiles): **PASS**
+
+### 1. Licence Switch (MIT → GNU GPLv3, `v1.3.0` onward)
+Completed all three requested mechanics:
+- [`LICENSE`](LICENSE): replaced with verbatim GNU GPLv3 full text.
+- [`README.md`](README.md): added explicit **License** section noting GPLv3 from `v1.3.0` onward, plus Pi 3B (64-bit Raspberry Pi OS) instructions alongside Pi 4/5 (Astroberry OS v3.2+) and the optional `--with-camera` EAA guide.
+- [`CHANGELOG.md`](CHANGELOG.md) & [`VERSION`](VERSION): bumped to `1.3.0` and documented the MIT → GPLv3 transition (clarifying that releases `≤ v1.2.0` retain their published MIT terms).
+
+### 2. Pi 3B Design & Architectural Decisions (Answering Your Flagged Calls)
+Designing strictly for **Raspberry Pi 3 Model B** (1 GB RAM, quad Cortex-A53, USB 2.0) + **disassembled Logitech UVC webcam** as the baseline (with Pi 4/5 headroom as an opt-in bonus):
+- **Opt-in by default (`--with-camera` / `CAMERA_ENABLED="false"`):** Keeps base mount-controller installs lean and zero-overhead on 1 GB RAM. Installing with `--with-camera` pulls `v4l-utils`, `python3-opencv`, and `python3-numpy` via apt (behind a `dpkg -s` fast-path) and enables `include-system-site-packages = true` in `/opt/onstep-autoprovision/.venv/pyvenv.cfg` so OpenCV never tries to build wheels on a Pi 3B. Flag persisted in `install-meta.env` (`INSTALL_WITH_CAMERA`) and forwarded automatically by `scripts/update_software.sh`.
+- **YUYV at `640×480` default (`320×240`, `800×600`, and opt-in Pi 4/5 `1280×720` selectable):** Captures uncompressed YUYV so MJPEG block artefacts never poison sharpness grading or phase correlation.
+- **In-RAM / tmpfs pipeline (zero per-frame SD wear):** Hardened `systemd/onstep-camera.service` (`MemoryMax=350M`, `Nice=5`, `ProtectSystem=strict`, `SupplementaryGroups=video`, `RuntimeDirectory=onstep-camera`) writes throttled (≤2 fps) stretched JPEG previews atomically to `/run/onstep-camera/preview.jpg` (tmpfs). Disk writes occur only on user-triggered **Save PNG** (`/var/lib/onstep-autoprovision/captures/astrodrive-YYYYMMDD-HHMMSS.{png,json}`).
+- **Keep-% reservoir lives in the camera service (`onstep_camera.py`):** Per your recommendation, the rolling 200-frame quality buffer and percentile gate stay inside `LiveStacker` so telemetry counters and the live stack never disagree.
+- **Both Requirement A modes implemented day one:**
+  - `dynamic_drift` *(default)*: OpenLiveStacker v34 non-tracking style — aligns on aggressively binned mono copy (`≤320 px`; `≤240 px` at 720p), shifts accumulator to track live field with exponential decay (`decay_frames=24`), auto-resets on sudden mount bumps (`>15%` of frame) followed by `settle_skip_frames=3`.
+  - `fixed_ref`: fixed reference + Welford online variance soft sigma-clipping (active once `≥6` frames), cumulative drift tracking, stops stacking and surfaces a prominent **"Recentre & Restart Stack"** prompt beyond `25%` drift.
+- **Both Requirement B sharpness metrics + cloud collapse guard:** Star FWHM (`100 / median_FWHM`, ignoring single hot pixels) when `≥3` stars are detected, falling back to PSS-style Gaussian-blurred Laplacian variance (noise-hardened against Logitech high-gain grain) for Moon/planets/daytime. Star-count collapse (`<30%` of rolling median after 5 clear frames) rejects cloudy frames separately (`rejected_clouds`).
+- **Strictly authenticated Web UI & zero token-in-URL leaks (M1):**
+  - Unauthenticated `GET /api/status` stays redacted (no `camera` field exposed).
+  - `GET /api/camera/preview.jpg`, `GET /api/camera/captures`, `GET /api/camera/captures/<file>` (strict regex `^astrodrive-[0-9]{8}-[0-9]{6}\.(png|json)$` + path containment check), `POST /api/camera/config`, and `POST /api/camera/action/<slug>` all enforce `_require_auth()` (`X-AstroDrive-Token`).
+  - `webui/index.html` fetches live preview JPEGs and saved PNG downloads via authenticated `fetch()` → `URL.createObjectURL(blob)` (revoking previous URLs on every frame) and pauses polling automatically when the tab or Dashboard is hidden.
+- **Clean INDI arbitration:** `onstep_camera.py` checks `onstep_common.find_device_holders(dev)` before opening `/dev/astrocam` and reports `state: "busy_indi"` cleanly whenever `indi_v4l2_ccd` holds the webcam instead of crash-looping.
+- **Deferred intentionally:** `astroalign` (heavy scipy/scikit-image dep on 1 GB Pi 3B) and guiding/ASTAP remain out of v1 until real-sky Pi 3B tests show whether translation-only phase correlation ever needs rotation recovery.
+
+### 3. Files Added / Updated
+- **New:** `scripts/onstep_camera.py`, `systemd/onstep-camera.service`, `udev/99-onstep-camera.rules`, `tests/test_camera_stacker.py`, `CHANGELOG.md`
+- **Updated:** `LICENSE`, `VERSION` (`1.3.0`), `webui/onstep_webui.py`, `webui/index.html`, `config/onstep-autoprovision.env.example`, `install.sh`, `scripts/update_software.sh`, `README.md`, `.github/workflows/lint.yml`
+
+### 4. Verification
+- All local checks pass: `bash -n` on all shell scripts, `py_compile` on all 6 Python modules, `node --check` + inline JS parse on `webui/index.html`, all 5 synthetic `LiveStacker` tests in `tests/test_camera_stacker.py` (which also caught & fixed two real bugs before push: `LiveStacker.__init__` calling `reset()` before initializing deques when starting in `fixed_ref`, and cloud-collapse warmup threshold + intuitive drift sign reporting), and the extended HTTP auth/redaction/camera/path-traversal smoke test suite.
+- All of these tests now also run in `.github/workflows/lint.yml` on every push/PR.
+
+Ready for your `v1.3.0` review, Bingo! Once the owner tests the disassembled Logitech webcam on the Pi 3B, we can tune exposure defaults, `v4l2-ctl` quirks for that exact Logitech PID, and real-world frame timing from live captures.
+
+— Antigravity

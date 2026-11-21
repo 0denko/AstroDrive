@@ -1,0 +1,34 @@
+[Unit]
+Description=AstroDrive USB Camera Capture & EAA Live Stacker
+Documentation=https://github.com/0denko/AstroDrive
+After=local-fs.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/onstep-autoprovision/config.env
+ExecStart=/opt/onstep-autoprovision/.venv/bin/python /opt/onstep-autoprovision/scripts/onstep_camera.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=onstep-camera
+SupplementaryGroups=video
+
+# tmpfs directory /run/onstep-camera for zero-SD-wear preview JPEGs
+RuntimeDirectory=onstep-camera
+RuntimeDirectoryMode=0755
+
+# Security hardening (matches onstep-autoprovision@.service)
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/onstep-autoprovision /run/onstep-camera
+MemoryMax=350M
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

@@ -3,6 +3,8 @@
 # and Astroberry OS v3.x (64-bit arm64).
 #
 # Flags:
+#   --with-camera        Install USB camera & EAA live-stacking deps (v4l-utils,
+#                        python3-opencv, python3-numpy) and enable onstep-camera.service
 #   --with-arduino-cli   Install pinned arduino-cli (v1.6.0, SHA-256 verified) +
 #                        ESP8266 (3.1.2) & ESP32 (2.0.17) cores for on-Pi compilation
 #   --enable-auto-flash  Set AUTO_FLASH="true" in /etc/onstep-autoprovision/config.env
@@ -17,6 +19,7 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
+WITH_CAMERA="false"
 WITH_ARDUINO_CLI="false"
 ENABLE_AUTO_FLASH="false"
 SKIP_UDEV_TRIGGER="false"
@@ -25,13 +28,14 @@ GITHUB_REPO_ARG=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --with-camera) WITH_CAMERA="true"; shift ;;
     --with-arduino-cli) WITH_ARDUINO_CLI="true"; shift ;;
     --enable-auto-flash) ENABLE_AUTO_FLASH="true"; shift ;;
     --skip-udev-trigger) SKIP_UDEV_TRIGGER="true"; shift ;;
     --github-repo) GITHUB_REPO_ARG="${2:?Missing owner/repo}"; shift 2 ;;
     --chroot) CHROOT_MODE="true"; shift ;;
     -h|--help)
-      sed -n '2,13p' "$0"
+      sed -n '2,15p' "$0"
       exit 0
       ;;
     *)
@@ -112,15 +116,18 @@ mkdir -p \
   "${INSTALL_DIR}/firmware-src" \
   "${CONFIG_DIR}" \
   "${STATE_DIR}/flash-once" \
+  "${STATE_DIR}/camera-cmd" \
+  "${STATE_DIR}/captures" \
   "${ARDUINO_CACHE}/staging" \
   "${ARDUINO_CACHE}/user"
 
-chmod 0755 "${STATE_DIR}"
+chmod 0755 "${STATE_DIR}" "${STATE_DIR}/camera-cmd" "${STATE_DIR}/captures"
 chmod 0700 "${STATE_DIR}/flash-once"
 
 install -m 0644 "${REPO_DIR}/scripts/onstep_common.py" "${INSTALL_DIR}/scripts/onstep_common.py"
 install -m 0755 "${REPO_DIR}/scripts/onstep_provision.py" "${INSTALL_DIR}/scripts/onstep_provision.py"
 install -m 0755 "${REPO_DIR}/scripts/probe_onstep.py" "${INSTALL_DIR}/scripts/probe_onstep.py"
+install -m 0755 "${REPO_DIR}/scripts/onstep_camera.py" "${INSTALL_DIR}/scripts/onstep_camera.py"
 install -m 0755 "${REPO_DIR}/scripts/update_firmware.sh" "${INSTALL_DIR}/scripts/update_firmware.sh"
 install -m 0755 "${REPO_DIR}/scripts/update_software.sh" "${INSTALL_DIR}/scripts/update_software.sh"
 install -m 0755 "${REPO_DIR}/scripts/setup_hotspot.sh" "${INSTALL_DIR}/scripts/setup_hotspot.sh"
@@ -158,6 +165,23 @@ if [ -d "${REPO_DIR}/firmware/prebuilt" ]; then
   done
 fi
 
+if [ "${WITH_CAMERA}" = "true" ]; then
+  CAM_PKGS=(v4l-utils python3-opencv python3-numpy)
+  MISSING_CAM_PKGS=()
+  for pkg in "${CAM_PKGS[@]}"; do
+    if ! dpkg -s "${pkg}" >/dev/null 2>&1; then
+      MISSING_CAM_PKGS+=("${pkg}")
+    fi
+  done
+  if [ "${#MISSING_CAM_PKGS[@]}" -eq 0 ]; then
+    echo "==> Camera packages (${CAM_PKGS[*]}) already installed (skipping apt)."
+  else
+    echo "==> Installing USB camera & EAA live-stacking packages: ${MISSING_CAM_PKGS[*]}..."
+    apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${MISSING_CAM_PKGS[@]}"
+  fi
+fi
+
 # m2 + #7: Validate venv health and skip pip install when requirements.txt + Python version are unchanged
 echo "==> Setting up Python virtual environment (${INSTALL_DIR}/.venv)..."
 VENV_DIR="${INSTALL_DIR}/.venv"
@@ -169,7 +193,14 @@ if [ -d "${VENV_DIR}" ]; then
   fi
 fi
 if [ ! -d "${VENV_DIR}" ]; then
-  python3 -m venv "${VENV_DIR}"
+  if [ "${WITH_CAMERA}" = "true" ]; then
+    python3 -m venv --system-site-packages "${VENV_DIR}"
+  else
+    python3 -m venv "${VENV_DIR}"
+  fi
+elif [ "${WITH_CAMERA}" = "true" ] && [ -f "${VENV_DIR}/pyvenv.cfg" ]; then
+  # Expose Debian python3-opencv & python3-numpy inside existing venv without rebuilding wheels on Pi 3B
+  sed -i 's/^include-system-site-packages *= *false/include-system-site-packages = true/' "${VENV_DIR}/pyvenv.cfg"
 fi
 DESIRED_STAMP="$(printf '%s\n' "$("${VENV_DIR}/bin/python" --version 2>&1)" "$(sha256sum "${INSTALL_DIR}/requirements.txt" | awk '{print $1}')" | sha256sum | awk '{print $1}')"
 CURRENT_STAMP="$(cat "${VENV_STAMP_FILE}" 2>/dev/null || true)"
@@ -228,6 +259,9 @@ elif [ "${EXISTING_CONFIG}" = "true" ]; then
   fi
 fi
 
+if [ "${WITH_CAMERA}" = "true" ]; then
+  set_config_key "CAMERA_ENABLED" "true"
+fi
 if [ "${WITH_ARDUINO_CLI}" = "true" ]; then
   set_config_key "AUTO_COMPILE" "true"
 fi
@@ -244,7 +278,7 @@ if [ ! -f "${TOKEN_FILE}" ]; then
 fi
 
 # Persist install metadata & flags so daily self-updates reproduce the exact install options
-INSTALLED_VERSION="$(tr -d '[:space:]' < "${REPO_DIR}/VERSION" 2>/dev/null || echo "1.2.0")"
+INSTALLED_VERSION="$(tr -d '[:space:]' < "${REPO_DIR}/VERSION" 2>/dev/null || echo "1.3.0")"
 INSTALLED_COMMIT="$(git -C "${REPO_DIR}" rev-parse HEAD 2>/dev/null || echo "")"
 cat > "${META_FILE}" <<EOF
 INSTALLED_VERSION="${INSTALLED_VERSION}"
@@ -252,22 +286,28 @@ INSTALLED_COMMIT="${INSTALLED_COMMIT}"
 ASTRODRIVE_SRC_DIR="${REPO_DIR}"
 INSTALL_WITH_ARDUINO_CLI="${WITH_ARDUINO_CLI}"
 INSTALL_ENABLE_AUTO_FLASH="${ENABLE_AUTO_FLASH}"
+INSTALL_WITH_CAMERA="${WITH_CAMERA}"
 EOF
 chmod 0644 "${META_FILE}"
 
-echo "==> Installing udev rule and systemd units..."
+echo "==> Installing udev rules and systemd units..."
 install -m 0644 "${REPO_DIR}/udev/99-onstep-nodemcu.rules" /etc/udev/rules.d/99-onstep-nodemcu.rules
+install -m 0644 "${REPO_DIR}/udev/99-onstep-camera.rules" /etc/udev/rules.d/99-onstep-camera.rules
 install -m 0644 "${REPO_DIR}/systemd/onstep-autoprovision@.service" /etc/systemd/system/onstep-autoprovision@.service
 install -m 0644 "${REPO_DIR}/systemd/onstep-firmware-update.service" /etc/systemd/system/onstep-firmware-update.service
 install -m 0644 "${REPO_DIR}/systemd/onstep-firmware-update.timer" /etc/systemd/system/onstep-firmware-update.timer
 install -m 0644 "${REPO_DIR}/systemd/astrodrive-update.service" /etc/systemd/system/astrodrive-update.service
 install -m 0644 "${REPO_DIR}/systemd/astrodrive-update.timer" /etc/systemd/system/astrodrive-update.timer
 install -m 0644 "${REPO_DIR}/systemd/onstep-webui.service" /etc/systemd/system/onstep-webui.service
+install -m 0644 "${REPO_DIR}/systemd/onstep-camera.service" /etc/systemd/system/onstep-camera.service
 
 # Enable background firmware & software update timers + Web UI service
 systemctl enable onstep-firmware-update.timer >/dev/null 2>&1 || true
 systemctl enable astrodrive-update.timer >/dev/null 2>&1 || true
 systemctl enable onstep-webui.service >/dev/null 2>&1 || true
+if [ "${WITH_CAMERA}" = "true" ]; then
+  systemctl enable onstep-camera.service >/dev/null 2>&1 || true
+fi
 
 # S2: Install Nginx Astroberry UI overlay and surface any failure loudly (never swallow silently)
 OVERLAY_RESULT="not_installed"
@@ -320,20 +360,24 @@ if [ "${CHROOT_MODE}" = "false" ]; then
   systemctl start onstep-firmware-update.timer || true
   systemctl start astrodrive-update.timer || true
   systemctl restart onstep-webui.service || true
+  if [ "${WITH_CAMERA}" = "true" ]; then
+    systemctl restart onstep-camera.service || true
+  fi
   udevadm control --reload-rules
   if [ "${SKIP_UDEV_TRIGGER}" != "true" ]; then
     udevadm trigger --subsystem-match=tty
+    udevadm trigger --subsystem-match=video4linux || true
   fi
 
   if [ -n "${SUDO_USER:-}" ] && id "${SUDO_USER}" >/dev/null 2>&1; then
-    usermod -aG dialout "${SUDO_USER}"
-    echo "==> Added ${SUDO_USER} to 'dialout' group (log out/in to apply)."
+    usermod -aG dialout,video "${SUDO_USER}" 2>/dev/null || usermod -aG dialout "${SUDO_USER}"
+    echo "==> Added ${SUDO_USER} to 'dialout' and 'video' groups (log out/in to apply)."
   fi
 else
   echo "==> Chroot mode detected: skipped live daemon reloads (will activate on first boot)."
   for u in astroberry pi; do
     if id "${u}" >/dev/null 2>&1; then
-      usermod -aG dialout "${u}" || true
+      usermod -aG dialout,video "${u}" 2>/dev/null || usermod -aG dialout "${u}" || true
     fi
   done
 fi

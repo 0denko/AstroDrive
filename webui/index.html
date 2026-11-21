@@ -181,6 +181,15 @@
     }
     .svg-box img { width: 100%; height: auto; display: block; border-radius: 6px; }
 
+    .cam-stage {
+      background: #04070c; border: 1px solid var(--border); border-radius: 10px;
+      min-height: 190px; display: grid; place-items: center; overflow: hidden;
+      margin: 10px 0; padding: 6px;
+    }
+    .cam-stage img { max-width: 100%; max-height: 440px; border-radius: 6px; display: block; object-fit: contain; }
+    input[type="range"] { width: 100%; accent-color: var(--accent); cursor: pointer; }
+    .slider-head { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); font-weight: 600; }
+
     .steps-ol { margin: 8px 0 12px 0; padding-left: 20px; display: grid; gap: 6px; }
     .steps-ol li { font-size: 14px; }
 
@@ -474,6 +483,110 @@
           <button id="refreshBtn" type="button">↻ Refresh</button>
         </div>
         <div class="msg" id="actionMsg"></div>
+      </section>
+
+      <section class="card" id="camCard">
+        <h3>📷 USB Camera &amp; EAA Live Stacker (Beta — Pi 3B Tuned)</h3>
+        <div class="banner" id="camBanner" style="margin-top: 4px;">
+          <div class="banner-title" id="camBannerTitle">Camera service disabled (opt-in)</div>
+          <div class="check-sub" id="camBannerSub">Install with <code>--with-camera</code> or enable below to stream &amp; live-stack a USB UVC webcam.</div>
+        </div>
+
+        <div class="banner warn hidden" id="camDriftBanner">
+          <div class="banner-title">⚠️ Target drifted beyond 25% of frame</div>
+          <div class="check-sub">Recentre the object in the eyepiece/mount, then tap <strong>Recentre &amp; Restart Stack</strong> (or switch to Dynamic Non-Tracking mode).</div>
+          <div class="actions" style="margin-top: 8px;">
+            <button class="primary sm" id="camDriftResetBtn" type="button">🎯 Recentre &amp; Restart Stack</button>
+          </div>
+        </div>
+
+        <div class="cam-stage" id="camStage">
+          <img id="camPreviewImg" class="hidden" alt="AstroDrive live stacked camera view" />
+          <span id="camPlaceholder" class="muted" style="margin: 0; text-align: center; padding: 12px;">
+            Live preview appears here when the camera service is enabled and a USB webcam is attached.
+          </span>
+        </div>
+
+        <div class="grid2" style="margin-bottom: 10px;">
+          <div class="kv"><div class="k">Effective Exposure</div><div class="v" id="camExpVal">—</div></div>
+          <div class="kv"><div class="k">Frames Kept / Cap</div><div class="v" id="camFramesVal">0 / 0</div></div>
+          <div class="kv"><div class="k">Rejected (Q / D / C)</div><div class="v" id="camRejVal">0 / 0 / 0</div></div>
+          <div class="kv"><div class="k">Sharpness / Stars</div><div class="v" id="camSharpVal">—</div></div>
+          <div class="kv"><div class="k">Cumulative Drift</div><div class="v" id="camDriftVal">0, 0 px (0%)</div></div>
+          <div class="kv"><div class="k">FPS / Dark Frame</div><div class="v" id="camFpsDarkVal">0 fps • Dark off</div></div>
+        </div>
+
+        <div class="form-grid" style="margin-bottom: 10px;">
+          <label class="toggle"><span>Enable Camera Service</span><input type="checkbox" id="camEnableToggle" /></label>
+          <label class="toggle"><span>EAA Live Stacking Active</span><input type="checkbox" id="camStackToggle" checked /></label>
+          <div class="field">
+            <span>Alignment Mode</span>
+            <select id="camModeSel">
+              <option value="dynamic_drift">Dynamic Non-Tracking (continuous drift + bump reset)</option>
+              <option value="fixed_ref">Fixed Reference (sigma-clipped deep stack)</option>
+            </select>
+          </div>
+          <div class="field">
+            <span>Lucky Imaging — Keep Best %</span>
+            <select id="camKeepSel">
+              <option value="25">Best 25% (sharpest)</option>
+              <option value="50" selected>Best 50% (balanced)</option>
+              <option value="75">Best 75%</option>
+              <option value="100">Keep 100% (all clear frames)</option>
+            </select>
+          </div>
+          <div class="field">
+            <span>Capture Resolution (YUYV)</span>
+            <select id="camResSel">
+              <option value="640x480" selected>640×480 (Pi 3B Default)</option>
+              <option value="320x240">320×240 (Fastest / Low CPU)</option>
+              <option value="800x600">800×600</option>
+              <option value="1280x720">1280×720 (Pi 4/5)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-grid" style="margin-bottom: 10px;">
+          <div class="field">
+            <div class="slider-head"><span>Asinh EAA Stretch</span><span id="camStretchVal">4.0</span></div>
+            <input type="range" id="camStretchSlider" min="0" max="20" step="0.5" value="4" />
+          </div>
+          <div class="field">
+            <div class="slider-head"><span>Black Point</span><span id="camBlackVal">0.02</span></div>
+            <input type="range" id="camBlackSlider" min="0" max="0.5" step="0.01" value="0.02" />
+          </div>
+          <div class="field">
+            <div class="slider-head"><span>White Point</span><span id="camWhiteVal">0.98</span></div>
+            <input type="range" id="camWhiteSlider" min="0.2" max="1.0" step="0.01" value="0.98" />
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="outline sm" id="camLockAutoBtn" type="button">🔒 Lock Auto Controls</button>
+          <button class="sm" id="camResetBtn" type="button">🎯 Recentre &amp; Restart Stack</button>
+          <button class="sm" id="camDarkBtn" type="button">🌑 Capture Dark (15f)</button>
+          <button class="sm" id="camClearDarkBtn" type="button">✕ Clear Dark</button>
+          <button class="primary sm" id="camSaveBtn" type="button">💾 Save PNG</button>
+        </div>
+
+        <div class="msg" id="camMsg"></div>
+
+        <details id="camV4l2Details" style="margin-top: 10px;">
+          <summary>Webcam Hardware Controls (V4L2)</summary>
+          <div id="camV4l2Wrap" class="form-grid" style="margin-top: 10px;">
+            <span class="muted">No UVC hardware controls reported yet.</span>
+          </div>
+          <div class="actions" style="margin-top: 8px;">
+            <button class="sm primary" id="camApplyV4l2Btn" type="button">Apply Hardware Controls</button>
+          </div>
+        </details>
+
+        <details id="camCapturesDetails" style="margin-top: 10px;">
+          <summary>Saved Captures (<span id="camCapturesCount">0</span>)</summary>
+          <div id="camCapturesList" style="margin-top: 8px;">
+            <span class="muted">Open to load saved PNG snapshots.</span>
+          </div>
+        </details>
       </section>
 
       <section class="card">
@@ -836,6 +949,10 @@
         $('cfg_GITHUB_REPO').value = s.config.GITHUB_REPO || '';
         cfgLoaded = true;
       }
+
+      if (s.camera) {
+        renderCameraStatus(s.camera);
+      }
     }
 
     function shouldFetchLogs() {
@@ -1040,6 +1157,267 @@
       setMsg('actionMsg', res.ok ? 'Settings saved.' : (res.data.error || 'Save failed'), res.ok ? 'ok' : 'err');
     });
 
+    // ==================== CAMERA & EAA LIVE STACKER ====================
+    let camCfgLoaded = false;
+    let camPreviewUrl = null;
+    let camPreviewBusy = false;
+    let camV4l2KeySig = '';
+
+    function renderCameraStatus(cam) {
+      const banner = $('camBanner');
+      const state = cam.state || 'disabled';
+      const m = cam.metrics || {};
+      const st = cam.settings || {};
+
+      $('camEnableToggle').checked = Boolean(cam.enabled);
+      $('camCapturesCount').textContent = String(cam.captures_count ?? 0);
+
+      if (state === 'stacking' || state === 'preview') {
+        banner.className = 'banner ok';
+        $('camBannerTitle').textContent = state === 'stacking'
+          ? `✅ Live EAA Stacking (${cam.resolution || st.resolution || '640x480'} @ ${cam.fps || 0} fps)`
+          : `✅ Live Camera Preview (${cam.resolution || st.resolution || '640x480'} @ ${cam.fps || 0} fps)`;
+        $('camBannerSub').textContent = `${cam.device || '/dev/astrocam'} • ${m.last_frame_action || cam.message || 'Running'}` + (cam.last_capture ? ` • ${cam.last_capture}` : '');
+      } else if (state === 'busy_indi' || state === 'busy' || state === 'disconnected' || state === 'starting') {
+        banner.className = 'banner warn';
+        $('camBannerTitle').textContent = state === 'busy_indi'
+          ? '⚠️ Camera held by INDI (indi_v4l2_ccd)'
+          : (state === 'disconnected' ? '🔌 Waiting for USB webcam…' : '⏳ Camera service status');
+        $('camBannerSub').textContent = cam.message || state;
+      } else if (state === 'missing_dependency' || state === 'error') {
+        banner.className = 'banner err';
+        $('camBannerTitle').textContent = state === 'missing_dependency'
+          ? '⚠️ Camera packages not installed yet'
+          : '⚠️ Camera error';
+        $('camBannerSub').textContent = cam.message || 'Check logs for details.';
+      } else {
+        banner.className = 'banner';
+        $('camBannerTitle').textContent = 'Camera service disabled (opt-in)';
+        $('camBannerSub').textContent = cam.message || 'Install with --with-camera or toggle Enable Camera Service below.';
+      }
+
+      $('camDriftBanner').classList.toggle('hidden', !m.drift_limit_reached);
+
+      const effExp = m.effective_exposure_sec ? `${m.effective_exposure_sec}s` : '—';
+      $('camExpVal').textContent = effExp;
+      $('camFramesVal').textContent = `${m.frames_kept || 0} / ${m.frames_captured || 0}`;
+      $('camRejVal').textContent = `${m.rejected_quality || 0} / ${(m.rejected_registration || 0) + (m.rejected_drift_limit || 0)} / ${m.rejected_clouds || 0}`;
+      if (m.last_metric === 'star_fwhm' && m.last_fwhm) {
+        $('camSharpVal').textContent = `FWHM ${m.last_fwhm}px (${m.last_star_count || 0}★)`;
+      } else if (m.last_score) {
+        $('camSharpVal').textContent = `Lap ${m.last_score} (≥${m.current_threshold || 0})`;
+      } else {
+        $('camSharpVal').textContent = '—';
+      }
+      $('camDriftVal').textContent = `${m.drift_x_px || 0}, ${m.drift_y_px || 0} px (${m.drift_pct || 0}%)`;
+      const darkLabel = m.dark_collecting ? 'Dark capturing…' : (m.dark_ready ? `Dark on (${m.dark_frames || 0}f)` : 'Dark off');
+      $('camFpsDarkVal').textContent = `${cam.fps || 0} fps • ${darkLabel}`;
+
+      const active = (state === 'stacking' || state === 'preview') && Boolean(cam.preview_ready);
+      if (!active) {
+        $('camPreviewImg').classList.add('hidden');
+        $('camPlaceholder').classList.remove('hidden');
+      }
+
+      if (!camCfgLoaded && Object.keys(st).length > 0) {
+        $('camStackToggle').checked = st.stacking !== false;
+        $('camModeSel').value = st.mode || 'dynamic_drift';
+        $('camKeepSel').value = String(st.keep_pct || 50);
+        $('camResSel').value = st.resolution || '640x480';
+        $('camStretchSlider').value = String(st.stretch_asinh ?? 4.0);
+        $('camStretchVal').textContent = Number(st.stretch_asinh ?? 4.0).toFixed(1);
+        $('camBlackSlider').value = String(st.black_point ?? 0.02);
+        $('camBlackVal').textContent = Number(st.black_point ?? 0.02).toFixed(2);
+        $('camWhiteSlider').value = String(st.white_point ?? 0.98);
+        $('camWhiteVal').textContent = Number(st.white_point ?? 0.98).toFixed(2);
+        camCfgLoaded = true;
+      }
+
+      renderV4l2Controls(cam.controls || {});
+    }
+
+    function renderV4l2Controls(ctrls) {
+      const keys = Object.keys(ctrls).filter((k) => ctrls[k] && typeof ctrls[k].min === 'number' && typeof ctrls[k].max === 'number');
+      const sig = keys.join(',');
+      if (sig === camV4l2KeySig) return;
+      camV4l2KeySig = sig;
+      const wrap = $('camV4l2Wrap');
+      if (keys.length === 0) {
+        wrap.innerHTML = '<span class="muted">No adjustable UVC integer controls reported yet.</span>';
+        return;
+      }
+      wrap.innerHTML = keys.map((k) => {
+        const c = ctrls[k];
+        const val = c.value ?? c.default ?? c.min;
+        const step = c.step && c.step > 0 ? c.step : 1;
+        return `
+          <div class="field">
+            <div class="slider-head"><span>${esc(k)}</span><span id="v4l2_val_${esc(k)}">${esc(val)}</span></div>
+            <input type="range" data-v4l2="${esc(k)}" min="${esc(c.min)}" max="${esc(c.max)}" step="${esc(step)}" value="${esc(val)}" ${c.inactive ? 'disabled' : ''} />
+          </div>
+        `;
+      }).join('');
+      wrap.querySelectorAll('input[data-v4l2]').forEach((inp) => {
+        inp.addEventListener('input', () => {
+          const lbl = document.getElementById('v4l2_val_' + inp.dataset.v4l2);
+          if (lbl) lbl.textContent = inp.value;
+        });
+      });
+    }
+
+    async function pollCameraPreview() {
+      if (camPreviewBusy || document.hidden || !getToken()) return;
+      if ($('dashView').classList.contains('hidden')) return;
+      const cam = latestStatus && latestStatus.camera;
+      if (!cam || !cam.preview_ready || (cam.state !== 'stacking' && cam.state !== 'preview')) return;
+
+      camPreviewBusy = true;
+      try {
+        const res = await fetch(`${API_BASE}/api/camera/preview.jpg`, {
+          headers: { 'X-AstroDrive-Token': getToken() },
+          cache: 'no-store',
+        });
+        if (res.ok) {
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          const img = $('camPreviewImg');
+          img.src = url;
+          img.classList.remove('hidden');
+          $('camPlaceholder').classList.add('hidden');
+          if (camPreviewUrl) URL.revokeObjectURL(camPreviewUrl);
+          camPreviewUrl = url;
+        }
+      } catch (_) {
+        // Retry quietly on next interval
+      } finally {
+        camPreviewBusy = false;
+      }
+    }
+
+    async function pushCameraConfig() {
+      const bp = parseFloat($('camBlackSlider').value);
+      const wp = Math.max(bp + 0.06, parseFloat($('camWhiteSlider').value));
+      $('camWhiteSlider').value = wp.toFixed(2);
+      $('camWhiteVal').textContent = wp.toFixed(2);
+      const payload = {
+        stacking: $('camStackToggle').checked,
+        mode: $('camModeSel').value,
+        keep_pct: parseInt($('camKeepSel').value, 10),
+        resolution: $('camResSel').value,
+        stretch_asinh: parseFloat($('camStretchSlider').value),
+        black_point: bp,
+        white_point: wp,
+      };
+      const res = await api('/api/camera/config', { method: 'POST', body: JSON.stringify(payload) });
+      setMsg('camMsg', res.ok ? 'Camera settings updated.' : (res.data.error || 'Failed updating camera settings'), res.ok ? 'ok' : 'err');
+    }
+
+    async function triggerCameraAction(slug, bodyObj = {}) {
+      const res = await api(`/api/camera/action/${slug}`, { method: 'POST', body: JSON.stringify(bodyObj) });
+      setMsg('camMsg', res.ok ? (res.data.message || 'Done.') : (res.data.error || 'Camera action failed'), res.ok ? 'ok' : 'err');
+      if (slug === 'save') setTimeout(refreshCameraCaptures, 1200);
+      setTimeout(() => refreshAll(false), 1200);
+    }
+
+    async function downloadCapture(filename) {
+      const tok = getToken();
+      if (!tok) return;
+      try {
+        const res = await fetch(`${API_BASE}/api/camera/captures/${encodeURIComponent(filename)}`, {
+          headers: { 'X-AstroDrive-Token': tok },
+        });
+        if (!res.ok) {
+          setMsg('camMsg', `Download failed (${res.status})`, 'err');
+          return;
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+      } catch (err) {
+        setMsg('camMsg', `Download error: ${err.message}`, 'err');
+      }
+    }
+
+    async function refreshCameraCaptures() {
+      if (!getToken()) return;
+      const res = await api('/api/camera/captures');
+      const wrap = $('camCapturesList');
+      if (!res.ok) {
+        wrap.innerHTML = `<span class="muted">${esc(res.data.error || 'Unable to load captures')}</span>`;
+        return;
+      }
+      const items = res.data.captures || [];
+      $('camCapturesCount').textContent = String(items.length);
+      if (items.length === 0) {
+        wrap.innerHTML = '<span class="muted">No saved captures yet — click "Save PNG" while stacking.</span>';
+        return;
+      }
+      wrap.innerHTML = `
+        <table>
+          <thead><tr><th>File</th><th>Details</th><th>Download</th></tr></thead>
+          <tbody>
+            ${items.map((it) => {
+              const mm = it.metrics || {};
+              const info = [it.resolution, mm.frames_kept ? `${mm.frames_kept}f` : '', `${it.size_kb} KB`].filter(Boolean).join(' • ');
+              return `<tr><td>${esc(it.file)}</td><td>${esc(info)}</td><td><button class="sm" data-dl="${esc(it.file)}" type="button">⬇ PNG</button></td></tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      `;
+      wrap.querySelectorAll('button[data-dl]').forEach((btn) => {
+        btn.addEventListener('click', () => downloadCapture(btn.dataset.dl));
+      });
+    }
+
+    $('camEnableToggle').addEventListener('change', async () => {
+      const enabled = $('camEnableToggle').checked ? 'true' : 'false';
+      setMsg('camMsg', enabled === 'true' ? 'Starting camera service…' : 'Stopping camera service…');
+      const res = await api('/api/config', { method: 'POST', body: JSON.stringify({ CAMERA_ENABLED: enabled }) });
+      setMsg('camMsg', res.ok ? (enabled === 'true' ? 'Camera service enabled.' : 'Camera service disabled.') : (res.data.error || 'Failed'), res.ok ? 'ok' : 'err');
+      setTimeout(() => refreshAll(false), 1500);
+    });
+
+    for (const id of ['camStackToggle', 'camModeSel', 'camKeepSel', 'camResSel']) {
+      $(id).addEventListener('change', pushCameraConfig);
+    }
+    $('camStretchSlider').addEventListener('input', () => { $('camStretchVal').textContent = Number($('camStretchSlider').value).toFixed(1); });
+    $('camBlackSlider').addEventListener('input', () => { $('camBlackVal').textContent = Number($('camBlackSlider').value).toFixed(2); });
+    $('camWhiteSlider').addEventListener('input', () => { $('camWhiteVal').textContent = Number($('camWhiteSlider').value).toFixed(2); });
+    for (const id of ['camStretchSlider', 'camBlackSlider', 'camWhiteSlider']) {
+      $(id).addEventListener('change', pushCameraConfig);
+    }
+
+    $('camLockAutoBtn').addEventListener('click', () => triggerCameraAction('lock-auto'));
+    $('camResetBtn').addEventListener('click', () => triggerCameraAction('stack-reset'));
+    $('camDriftResetBtn').addEventListener('click', () => triggerCameraAction('stack-reset'));
+    $('camDarkBtn').addEventListener('click', () => triggerCameraAction('capture-dark', { count: 15 }));
+    $('camClearDarkBtn').addEventListener('click', () => triggerCameraAction('clear-dark'));
+    $('camSaveBtn').addEventListener('click', () => triggerCameraAction('save'));
+
+    $('camApplyV4l2Btn').addEventListener('click', async () => {
+      const ctrls = {};
+      $('camV4l2Wrap').querySelectorAll('input[data-v4l2]:not(:disabled)').forEach((inp) => {
+        ctrls[inp.dataset.v4l2] = parseInt(inp.value, 10);
+      });
+      if (Object.keys(ctrls).length === 0) {
+        setMsg('camMsg', 'No active hardware controls to apply.');
+        return;
+      }
+      const res = await api('/api/camera/config', { method: 'POST', body: JSON.stringify({ v4l2_controls: ctrls }) });
+      setMsg('camMsg', res.ok ? 'Applied V4L2 hardware controls.' : (res.data.error || 'Failed'), res.ok ? 'ok' : 'err');
+      setTimeout(() => refreshAll(false), 1500);
+    });
+
+    $('camCapturesDetails').addEventListener('toggle', () => {
+      if ($('camCapturesDetails').open) refreshCameraCaptures();
+    });
+
     initTokenFromUrl();
     const savedView = localStorage.getItem('astrodrive_view');
     const wizDone = localStorage.getItem('astrodrive_wizard_done') === '1';
@@ -1047,7 +1425,8 @@
 
     refreshAll(false);
     setInterval(() => refreshAll(false), 6000);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshAll(false); });
+    setInterval(pollCameraPreview, 800);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) { refreshAll(false); pollCameraPreview(); } });
   </script>
 </body>
 </html>

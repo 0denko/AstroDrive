@@ -49,6 +49,7 @@ from onstep_common import (  # noqa: E402
     parse_env_file,
     read_json_file,
     write_config_keys,
+    write_json_atomic,
 )
 
 LOG = logging.getLogger("onstep-webui")
@@ -58,6 +59,7 @@ TOKEN_FILE = Path(os.environ.get("ONSTEP_TOKEN_FILE", "/etc/onstep-autoprovision
 STATE_DIR = Path(os.environ.get("ONSTEP_STATE_DIR", "/var/lib/onstep-autoprovision"))
 FIRMWARE_DIR = Path(os.environ.get("FIRMWARE_DIR", "/opt/onstep-autoprovision/firmware"))
 SYMLINK_PATH = Path(os.environ.get("SYMLINK_PATH", "/dev/onstep"))
+CAMERA_PREVIEW_FILE = Path(os.environ.get("CAMERA_PREVIEW_FILE", "/run/onstep-camera/preview.jpg"))
 UPDATE_SCRIPT = Path(os.environ.get("UPDATE_SCRIPT", str(SCRIPTS_DIR / "update_firmware.sh")))
 SOFTWARE_UPDATE_SCRIPT = Path(os.environ.get("SOFTWARE_UPDATE_SCRIPT", str(SCRIPTS_DIR / "update_software.sh")))
 HOTSPOT_SCRIPT = Path(os.environ.get("HOTSPOT_SCRIPT", str(SCRIPTS_DIR / "setup_hotspot.sh")))
@@ -68,6 +70,36 @@ ALLOWED_SVG_FILES = {
     "wiring-nodemcu-esp8266-tmc2208.svg",
 }
 
+ALLOWED_CAMERA_RESOLUTIONS = {"320x240", "640x480", "800x600", "1280x720"}
+ALLOWED_CAMERA_MODES = {"dynamic_drift", "fixed_ref"}
+ALLOWED_CAMERA_ACTIONS = {
+    "stack-reset": "stack_reset",
+    "lock-auto": "lock_auto",
+    "capture-dark": "capture_dark",
+    "clear-dark": "clear_dark",
+    "save": "save",
+}
+ALLOWED_V4L2_CONTROLS = {
+    "auto_exposure",
+    "exposure_auto",
+    "exposure_time_absolute",
+    "exposure_absolute",
+    "exposure_dynamic_framerate",
+    "gain",
+    "gain_automatic",
+    "white_balance_automatic",
+    "white_balance_temperature_auto",
+    "white_balance_temperature",
+    "focus_automatic_continuous",
+    "focus_auto",
+    "focus_absolute",
+    "brightness",
+    "contrast",
+    "saturation",
+    "sharpness",
+}
+CAPTURE_FILE_RE = re.compile(r"^astrodrive-[0-9]{8}-[0-9]{6}\.(png|json)$")
+
 # M1: GITHUB_REPO is deliberately NOT mutable via HTTP!
 ALLOWED_CONFIG_KEYS = {
     "TARGET_CHIP": re.compile(r"^(auto|esp8266|esp32)$"),
@@ -77,6 +109,7 @@ ALLOWED_CONFIG_KEYS = {
     "PREFER_LIVE_COMPILE": re.compile(r"^(true|false)$"),
     "ONLINE_CHECK_UPDATES": re.compile(r"^(true|false)$"),
     "AUTO_UPDATE_SOFTWARE": re.compile(r"^(true|false)$"),
+    "CAMERA_ENABLED": re.compile(r"^(true|false)$"),
 }
 
 CONFIG_LOCK = threading.Lock()
@@ -117,6 +150,7 @@ def read_config_env() -> dict[str, str]:
         "PREFER_LIVE_COMPILE": "false",
         "ONLINE_CHECK_UPDATES": "true",
         "AUTO_UPDATE_SOFTWARE": "true",
+        "CAMERA_ENABLED": "false",
         "GITHUB_REPO": "0denko/AstroDrive",
         "PROBE_BAUDS": "9600,115200,57600,19200",
         "ALLOWED_USB_SERIALS": "",
@@ -140,6 +174,16 @@ def update_config_env(updates: dict[str, str]) -> dict[str, str]:
         clean[key] = sval
     with CONFIG_LOCK:
         write_config_keys(CONFIG_FILE, clean)
+    if "CAMERA_ENABLED" in clean:
+        action = "restart" if clean["CAMERA_ENABLED"] == "true" else "stop"
+        try:
+            subprocess.Popen(
+                ["systemctl", action, "--no-block", "onstep-camera.service"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
     invalidate_status_cache()
     return read_config_env()
 
@@ -364,6 +408,140 @@ def read_network_status() -> dict[str, Any]:
     }
 
 
+def read_camera_status(cfg: dict[str, str]) -> dict[str, Any]:
+    """Read camera daemon status & saved captures summary (authenticated status only)."""
+    enabled = cfg.get("CAMERA_ENABLED", "false") == "true"
+    st = read_json_file(STATE_DIR / "camera-status.json")
+    if not st:
+        st = {
+            "enabled": enabled,
+            "state": "starting" if enabled else "disabled",
+            "message": (
+                "Camera service is starting…"
+                if enabled
+                else "Camera service is disabled (opt-in). Run install.sh --with-camera or toggle Enable Camera."
+            ),
+        }
+    st["enabled"] = enabled
+    st["preview_ready"] = CAMERA_PREVIEW_FILE.is_file()
+    captures_dir = STATE_DIR / "captures"
+    st["captures_count"] = len(list(captures_dir.glob("astrodrive-*.png"))) if captures_dir.is_dir() else 0
+    return st
+
+
+def list_camera_captures(limit: int = 30) -> list[dict[str, Any]]:
+    captures_dir = STATE_DIR / "captures"
+    if not captures_dir.is_dir():
+        return []
+    items: list[dict[str, Any]] = []
+    for png in sorted(captures_dir.glob("astrodrive-*.png"), reverse=True)[:limit]:
+        if not CAPTURE_FILE_RE.match(png.name):
+            continue
+        meta = read_json_file(png.with_suffix(".json"))
+        try:
+            size_kb = round(png.stat().st_size / 1024.0, 1)
+        except OSError:
+            size_kb = 0.0
+        items.append({
+            "file": png.name,
+            "meta_file": png.with_suffix(".json").name if png.with_suffix(".json").is_file() else "",
+            "size_kb": size_kb,
+            "saved_at_utc": meta.get("saved_at_utc", ""),
+            "resolution": meta.get("resolution", ""),
+            "metrics": meta.get("metrics", {}),
+        })
+    return items
+
+
+def update_camera_config(body: dict[str, Any]) -> dict[str, Any]:
+    """Validate and atomically persist camera stacker & V4L2 settings for onstep_camera.py."""
+    cmd_dir = STATE_DIR / "camera-cmd"
+    cfg_path = cmd_dir / "config.json"
+    merged = read_json_file(cfg_path)
+    merged.pop("v4l2_controls", None)
+
+    if "stacking" in body:
+        if not isinstance(body["stacking"], bool):
+            raise ValueError("stacking must be a boolean")
+        merged["stacking"] = body["stacking"]
+
+    if "mode" in body:
+        mode = str(body["mode"]).strip()
+        if mode not in ALLOWED_CAMERA_MODES:
+            raise ValueError(f"Unsupported mode: {mode!r}")
+        merged["mode"] = mode
+
+    if "keep_pct" in body:
+        kp = int(body["keep_pct"])
+        if kp < 10 or kp > 100:
+            raise ValueError("keep_pct must be between 10 and 100")
+        merged["keep_pct"] = kp
+
+    if "resolution" in body:
+        res = str(body["resolution"]).strip()
+        if res not in ALLOWED_CAMERA_RESOLUTIONS:
+            raise ValueError(f"Unsupported resolution: {res!r}")
+        merged["resolution"] = res
+
+    if "stretch_asinh" in body:
+        sa = float(body["stretch_asinh"])
+        if not (0.0 <= sa <= 20.0):
+            raise ValueError("stretch_asinh must be between 0.0 and 20.0")
+        merged["stretch_asinh"] = round(sa, 3)
+
+    if "black_point" in body:
+        bp = float(body["black_point"])
+        if not (0.0 <= bp <= 0.8):
+            raise ValueError("black_point must be between 0.0 and 0.8")
+        merged["black_point"] = round(bp, 4)
+
+    if "white_point" in body:
+        wp = float(body["white_point"])
+        if not (0.1 <= wp <= 1.0):
+            raise ValueError("white_point must be between 0.1 and 1.0")
+        merged["white_point"] = round(wp, 4)
+
+    bp_cur = float(merged.get("black_point", 0.02))
+    wp_cur = float(merged.get("white_point", 0.98))
+    if wp_cur <= bp_cur + 0.05:
+        raise ValueError("white_point must be at least 0.05 above black_point")
+
+    if "v4l2_controls" in body:
+        raw_ctrls = body["v4l2_controls"]
+        if not isinstance(raw_ctrls, dict):
+            raise ValueError("v4l2_controls must be an object")
+        clean_ctrls: dict[str, int] = {}
+        for k, v in raw_ctrls.items():
+            if k not in ALLOWED_V4L2_CONTROLS:
+                raise ValueError(f"Unsupported V4L2 control: {k!r}")
+            ival = int(v)
+            if ival < -65536 or ival > 1000000:
+                raise ValueError(f"Out-of-range value for {k}: {ival}")
+            clean_ctrls[k] = ival
+        if clean_ctrls:
+            merged["v4l2_controls"] = clean_ctrls
+
+    cmd_dir.mkdir(parents=True, exist_ok=True)
+    write_json_atomic(cfg_path, merged)
+    invalidate_status_cache()
+    return merged
+
+
+def queue_camera_action(action_slug: str, body: dict[str, Any]) -> dict[str, Any]:
+    mapped = ALLOWED_CAMERA_ACTIONS.get(action_slug)
+    if not mapped:
+        raise ValueError(f"Unsupported camera action: {action_slug!r}")
+    payload: dict[str, Any] = {"action": mapped}
+    if mapped == "capture_dark" and "count" in body:
+        payload["count"] = max(3, min(int(body["count"]), 50))
+    cmd_dir = STATE_DIR / "camera-cmd"
+    cmd_dir.mkdir(parents=True, exist_ok=True)
+    action_path = cmd_dir / f"action-{time.time_ns()}.json"
+    write_json_atomic(action_path, payload)
+    invalidate_status_cache()
+    return payload
+
+
 def _build_full_status_uncached(run_probe: bool = False) -> dict[str, Any]:
     cfg = read_config_env()
     meta = parse_env_file(META_FILE)
@@ -431,6 +609,7 @@ def _build_full_status_uncached(run_probe: bool = False) -> dict[str, Any]:
         "network": read_network_status(),
         "install_status": install_status,
         "software_update": software_update,
+        "camera": read_camera_status(cfg),
     }
 
 
@@ -451,7 +630,7 @@ def build_status(run_probe: bool = False, authenticated: bool = True) -> dict[st
     if authenticated:
         return full
 
-    # M1 residual #1: Unauthenticated callers get ONLY minimal pill state (no serials/IPs/SSIDs/config)
+    # M1 residual #1: Unauthenticated callers get ONLY minimal pill state (no serials/IPs/SSIDs/config/camera)
     return {
         "auth_required": True,
         "authenticated": False,
@@ -475,6 +654,8 @@ def read_logs(lines: int = 120) -> str:
                 "onstep-firmware-update.service",
                 "-u",
                 "astrodrive-update.service",
+                "-u",
+                "onstep-camera.service",
                 "--no-pager",
                 "-n",
                 str(lines),
@@ -498,12 +679,21 @@ def _clean_wifi_str(val: Any, max_len: int = 64) -> str:
 
 
 class OnStepWebUIHandler(BaseHTTPRequestHandler):
-    server_version = "OnStepOverlayWebUI/2.2"
+    server_version = "OnStepOverlayWebUI/2.3"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         # #1: Suppress noisy INFO logs on high-frequency read-only polling routes to reduce SD wear
         path = urlparse(getattr(self, "path", "")).path
-        if path in {"/api/status", "/onstep/api/status", "/api/logs", "/onstep/api/logs"}:
+        if path in {
+            "/api/status",
+            "/onstep/api/status",
+            "/api/logs",
+            "/onstep/api/logs",
+            "/api/camera/preview.jpg",
+            "/onstep/api/camera/preview.jpg",
+            "/api/camera/captures",
+            "/onstep/api/camera/captures",
+        }:
             return
         LOG.info("%s - %s", self.address_string(), fmt % args)
 
@@ -595,6 +785,41 @@ class OnStepWebUIHandler(BaseHTTPRequestHandler):
             except ValueError:
                 lines = 120
             self._send_json({"logs": read_logs(lines)})
+        elif path == "/api/camera/preview.jpg":
+            if not self._require_auth():
+                return
+            if not CAMERA_PREVIEW_FILE.is_file():
+                self._send_json({"ok": False, "error": "Camera preview not ready"}, HTTPStatus.NOT_FOUND)
+                return
+            try:
+                body = CAMERA_PREVIEW_FILE.read_bytes()
+            except OSError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif path == "/api/camera/captures":
+            if not self._require_auth():
+                return
+            self._send_json({"ok": True, "captures": list_camera_captures()})
+        elif path.startswith("/api/camera/captures/"):
+            if not self._require_auth():
+                return
+            fname = path[len("/api/camera/captures/") :]
+            if not CAPTURE_FILE_RE.match(fname):
+                self._send_json({"ok": False, "error": "Invalid capture filename"}, HTTPStatus.BAD_REQUEST)
+                return
+            target = (STATE_DIR / "captures" / fname).resolve()
+            captures_root = (STATE_DIR / "captures").resolve()
+            if captures_root not in target.parents or not target.is_file():
+                self._send_json({"ok": False, "error": "Capture not found"}, HTTPStatus.NOT_FOUND)
+                return
+            ctype = "image/png" if fname.endswith(".png") else "application/json; charset=utf-8"
+            self._send_file(target, ctype)
         else:
             self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
@@ -795,6 +1020,34 @@ class OnStepWebUIHandler(BaseHTTPRequestHandler):
                 invalidate_status_cache()
                 now_str = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
                 self._send_json({"ok": True, "message": f"Pi clock synced to {now_str}", "system_time_utc": now_str})
+            except (ValueError, TypeError) as exc:
+                self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        if path == "/api/camera/config":
+            try:
+                updated = update_camera_config(body)
+                self._send_json({"ok": True, "settings": updated, "message": "Camera settings applied."})
+            except (ValueError, TypeError) as exc:
+                self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        if path.startswith("/api/camera/action/"):
+            slug = path[len("/api/camera/action/") :]
+            try:
+                queued = queue_camera_action(slug, body)
+                labels = {
+                    "stack_reset": "Stack reset & recentred.",
+                    "lock_auto": "Requested UVC auto-control lock (manual exposure/gain/WB/focus).",
+                    "capture_dark": f"Capturing {queued.get('count', 15)} dark frames (cover telescope/lens cap!)…",
+                    "clear_dark": "Cleared master dark frame.",
+                    "save": "Saving stretched PNG + metadata to /var/lib/onstep-autoprovision/captures…",
+                }
+                self._send_json({"ok": True, "action": queued["action"], "message": labels.get(queued["action"], "Action queued.")})
             except (ValueError, TypeError) as exc:
                 self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
             except Exception as exc:
