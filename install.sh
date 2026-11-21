@@ -3,8 +3,9 @@
 # and Astroberry OS v3.x (64-bit arm64).
 #
 # Flags:
-#   --with-camera        Install USB camera & EAA live-stacking deps (v4l-utils,
-#                        python3-opencv, python3-numpy) and enable onstep-camera.service
+#   --without-camera     Skip installing USB camera & EAA live-stacking deps
+#                        (v4l-utils, python3-opencv, python3-numpy) and disable camera service
+#   --with-camera        Explicitly install & enable USB camera service (now enabled by default)
 #   --with-arduino-cli   Install pinned arduino-cli (v1.6.0, SHA-256 verified) +
 #                        ESP8266 (3.1.2) & ESP32 (2.0.17) cores for on-Pi compilation
 #   --enable-auto-flash  Set AUTO_FLASH="true" in /etc/onstep-autoprovision/config.env
@@ -19,7 +20,8 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-WITH_CAMERA="false"
+WITH_CAMERA="true"
+EXPLICIT_WITH_CAMERA="false"
 WITH_ARDUINO_CLI="false"
 ENABLE_AUTO_FLASH="false"
 SKIP_UDEV_TRIGGER="false"
@@ -28,14 +30,15 @@ GITHUB_REPO_ARG=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --with-camera) WITH_CAMERA="true"; shift ;;
+    --with-camera) WITH_CAMERA="true"; EXPLICIT_WITH_CAMERA="true"; shift ;;
+    --without-camera|--no-camera) WITH_CAMERA="false"; shift ;;
     --with-arduino-cli) WITH_ARDUINO_CLI="true"; shift ;;
     --enable-auto-flash) ENABLE_AUTO_FLASH="true"; shift ;;
     --skip-udev-trigger) SKIP_UDEV_TRIGGER="true"; shift ;;
     --github-repo) GITHUB_REPO_ARG="${2:?Missing owner/repo}"; shift 2 ;;
     --chroot) CHROOT_MODE="true"; shift ;;
     -h|--help)
-      sed -n '2,15p' "$0"
+      sed -n '2,16p' "$0"
       exit 0
       ;;
     *)
@@ -259,7 +262,9 @@ elif [ "${EXISTING_CONFIG}" = "true" ]; then
   fi
 fi
 
-if [ "${WITH_CAMERA}" = "true" ]; then
+if [ "${WITH_CAMERA}" = "false" ]; then
+  set_config_key "CAMERA_ENABLED" "false"
+elif [ "${EXPLICIT_WITH_CAMERA}" = "true" ] || ! grep -Eq '^\s*CAMERA_ENABLED\s*=' "${CONFIG_FILE}"; then
   set_config_key "CAMERA_ENABLED" "true"
 fi
 if [ "${WITH_ARDUINO_CLI}" = "true" ]; then
@@ -301,12 +306,15 @@ install -m 0644 "${REPO_DIR}/systemd/astrodrive-update.timer" /etc/systemd/syste
 install -m 0644 "${REPO_DIR}/systemd/onstep-webui.service" /etc/systemd/system/onstep-webui.service
 install -m 0644 "${REPO_DIR}/systemd/onstep-camera.service" /etc/systemd/system/onstep-camera.service
 
-# Enable background firmware & software update timers + Web UI service
+# Enable background firmware & software update timers + Web UI service + camera service (default on)
 systemctl enable onstep-firmware-update.timer >/dev/null 2>&1 || true
 systemctl enable astrodrive-update.timer >/dev/null 2>&1 || true
 systemctl enable onstep-webui.service >/dev/null 2>&1 || true
-if [ "${WITH_CAMERA}" = "true" ]; then
+CUR_CAMERA_ENABLED="$(grep -E '^\s*CAMERA_ENABLED\s*=' "${CONFIG_FILE}" | tail -n 1 | cut -d= -f2- | tr -d '\"'\'' ' || echo "true")"
+if [ "${WITH_CAMERA}" = "true" ] && [ "${CUR_CAMERA_ENABLED}" = "true" ]; then
   systemctl enable onstep-camera.service >/dev/null 2>&1 || true
+else
+  systemctl disable onstep-camera.service >/dev/null 2>&1 || true
 fi
 
 # S2: Install Nginx Astroberry UI overlay and surface any failure loudly (never swallow silently)
@@ -360,8 +368,10 @@ if [ "${CHROOT_MODE}" = "false" ]; then
   systemctl start onstep-firmware-update.timer || true
   systemctl start astrodrive-update.timer || true
   systemctl restart onstep-webui.service || true
-  if [ "${WITH_CAMERA}" = "true" ]; then
+  if [ "${WITH_CAMERA}" = "true" ] && [ "${CUR_CAMERA_ENABLED}" = "true" ]; then
     systemctl restart onstep-camera.service || true
+  else
+    systemctl stop onstep-camera.service >/dev/null 2>&1 || true
   fi
   udevadm control --reload-rules
   if [ "${SKIP_UDEV_TRIGGER}" != "true" ]; then

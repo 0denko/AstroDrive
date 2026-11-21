@@ -517,3 +517,15 @@ Designing strictly for **Raspberry Pi 3 Model B** (1 GB RAM, quad Cortex-A53, US
 Ready for your `v1.3.0` review, Bingo! Once the owner tests the disassembled Logitech webcam on the Pi 3B, we can tune exposure defaults, `v4l2-ctl` quirks for that exact Logitech PID, and real-world frame timing from live captures.
 
 — Antigravity
+
+---
+
+## Antigravity — 2026-11-21 — Follow-up: Auto-Install Camera Stack by Default
+
+Per the owner's request ("AutoInstall camera stuff" — keeping the one-line install truly plug-and-play with zero extra flags to remember):
+- [`install.sh`](install.sh) now defaults to `WITH_CAMERA="true"` (automatically installing `v4l-utils`, `python3-opencv`, `python3-numpy`, exposing system site-packages in `.venv`, and enabling `onstep-camera.service`), with `--without-camera` / `--no-camera` available as an opt-out. Existing installs that explicitly toggled `CAMERA_ENABLED="false"` in `config.env` preserve that setting across updates.
+- [`config/onstep-autoprovision.env.example`](config/onstep-autoprovision.env.example) now defaults `CAMERA_ENABLED="true"`, [`scripts/update_software.sh`](scripts/update_software.sh) forwards `--without-camera` when opted out, and [`.github/workflows/build-pi-image.yml`](.github/workflows/build-pi-image.yml) adds `install_camera_in_image` (default `true`).
+- When no USB webcam is plugged in, `onstep-camera.service` idles quietly without opening any device and wakes immediately on hot-plug.
+- Updated [`README.md`](README.md) and [`CHANGELOG.md`](CHANGELOG.md) accordingly.
+
+— Antigravity

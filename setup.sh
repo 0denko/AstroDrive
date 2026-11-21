@@ -8,6 +8,7 @@
 #   1. Installs required packages if missing (python3, venv, git, curl, udev).
 #   2. Downloads (or updates) AstroDrive into /opt/astrodrive-src.
 #   3. Installs the OnStepX provisioner (safe AUTO_FLASH=false by default),
+#      USB camera + EAA live stacker (v4l-utils, python3-opencv; pass --without-camera to skip),
 #      authenticated Web Setup Wizard, daily self-updater, and Astroberry UI overlay.
 #   4. Downloads the latest CI-built ESP32 & ESP8266 OnStepX firmware (SHA-256 checked
 #      against the release manifest) and warns clearly if offline or download fails.

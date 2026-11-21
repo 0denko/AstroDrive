@@ -419,7 +419,7 @@ def read_camera_status(cfg: dict[str, str]) -> dict[str, Any]:
             "message": (
                 "Camera service is starting…"
                 if enabled
-                else "Camera service is disabled (opt-in). Run install.sh --with-camera or toggle Enable Camera."
+                else "Camera service is disabled. Toggle Enable Camera Service below to start it."
             ),
         }
     st["enabled"] = enabled

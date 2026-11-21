@@ -44,13 +44,8 @@ No manual firmware compiling, no config file editing, and no memorizing Linux co
 curl -fsSL https://raw.githubusercontent.com/0denko/AstroDrive/main/setup.sh | sudo bash
 ```
 
-   *(Want built-in USB webcam live view & EAA live stacking too? Add `--with-camera`:)*
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/0denko/AstroDrive/main/setup.sh | sudo bash -s -- --with-camera
-   ```
-
 3. Wait **3–5 minutes** until you see **`AstroDrive is installed and ready!`** *(if the Pi has no internet yet, it will clearly warn that firmware wasn't downloaded and tell you how to retry)*.
-   - This installs AstroDrive, downloads the latest CI-built OnStepX firmware for both ESP32 and NodeMCU (SHA-256 checked against the release manifest), pre-configures KStars/Ekos (`LX200 OnStep` on `/dev/onstep` at `9600` baud), enables safe daily background updates (opt-out), and prints your personal **Setup Wizard link** (which includes your Setup PIN).
+   - This automatically installs AstroDrive, the USB webcam & EAA live-stacking service, downloads the latest CI-built OnStepX firmware for both ESP32 and NodeMCU (SHA-256 checked against the release manifest), pre-configures KStars/Ekos (`LX200 OnStep` on `/dev/onstep` at `9600` baud), enables safe daily background updates (opt-out), and prints your personal **Setup Wizard link** (which includes your Setup PIN).
    - You can close the Terminal after copying or clicking the link!
 
 ---
@@ -73,15 +68,15 @@ curl -fsSL https://raw.githubusercontent.com/0denko/AstroDrive/main/setup.sh | s
 
 ---
 
-## Optional: USB Camera & Live Stacking (EAA)
+## USB Camera & Live Stacking (EAA)
 
-If you installed with `--with-camera` (or re-run `sudo /opt/astrodrive-src/install.sh --with-camera`), plug any standard USB UVC webcam (such as a disassembled Logitech webcam) into the Pi and open the **Dashboard** tab in AstroDrive:
+USB webcam support is **installed automatically** — just plug any standard USB UVC webcam (such as a disassembled Logitech webcam) into the Pi and open the **Dashboard** tab in AstroDrive:
 
 1. Tap **🔒 Lock Auto Controls** to turn off auto-exposure, auto-gain, auto-white-balance, and autofocus.
 2. Adjust exposure/gain under **Webcam Hardware Controls (V4L2)** and tune the **Asinh EAA Stretch** slider.
 3. Choose **Dynamic Non-Tracking** (follows continuous drift & auto-resets if you bump the mount) or **Fixed Reference** (sigma-clipped deep stack with drift prompt), pick **Keep Best 25–100%** to reject blurry or cloudy frames automatically, and click **💾 Save PNG** to download your stacked image.
 
-*(Tuned for Raspberry Pi 3B at `640×480` YUYV in RAM/tmpfs with zero per-frame microSD wear, and automatically steps aside whenever INDI `indi_v4l2_ccd` is using the camera.)*
+*(Tuned for Raspberry Pi 3B at `640×480` YUYV in RAM/tmpfs with zero per-frame microSD wear, idles silently when no webcam is plugged in, and steps aside automatically whenever INDI `indi_v4l2_ccd` is using the camera.)*
 
 ---
 
@@ -140,7 +135,7 @@ All pin assignments in both firmware profiles match [`HARDWARE.md`](HARDWARE.md)
 
 1. **`udev`** (`udev/99-onstep-nodemcu.rules`) detects CP2102 (`10c4:ea60`), CH340 (`1a86:7523`), CH9102 (`1a86:55d4`), and Espressif native USB-CDC (`303a:1001`) boards, creates per-device `/dev/onstep-raw-%k` symlinks, blocks `ModemManager` (`ID_MM_DEVICE_IGNORE=1`), and triggers `onstep-autoprovision@<dev>.service`.
 2. **`systemd` + Python** (`scripts/onstep_provision.py`) acquires an exclusive `flock`, verifies no active INDI session holds the port, probes LX200 `:GVP#` / `:GVN#` without DTR/RTS reset, and **atomically publishes `/dev/onstep`** for `indi_lx200_OnStep`. Blank boards are only flashed when explicitly authorized from the Setup Wizard (single-use ticket + USB allowlist recording) or when `AUTO_FLASH="true"` is intentionally enabled.
-3. **Optional USB Camera & EAA Stacker** (`scripts/onstep_camera.py`, `systemd/onstep-camera.service`, `udev/99-onstep-camera.rules`) binds `/dev/astrocam`, captures uncompressed YUYV frames at `640×480` (Pi 3B baseline, `MemoryMax=350M`, `Nice=5`), grades sharpness (star FWHM / blurred-Laplacian + rolling Keep Best % + cloud collapse guard), aligns continuous drift via binned phase correlation (`dynamic_drift` or sigma-clipped `fixed_ref`), and writes display previews atomically to tmpfs (`/run/onstep-camera/preview.jpg`) served only over authenticated `X-AstroDrive-Token` endpoints.
+3. **USB Camera & EAA Stacker** (`scripts/onstep_camera.py`, `systemd/onstep-camera.service`, `udev/99-onstep-camera.rules`) binds `/dev/astrocam`, captures uncompressed YUYV frames at `640×480` (Pi 3B baseline, `MemoryMax=350M`, `Nice=5`), grades sharpness (star FWHM / blurred-Laplacian + rolling Keep Best % + cloud collapse guard), aligns continuous drift via binned phase correlation (`dynamic_drift` or sigma-clipped `fixed_ref`), and writes display previews atomically to tmpfs (`/run/onstep-camera/preview.jpg`) served only over authenticated `X-AstroDrive-Token` endpoints.
 4. **Authenticated Web UI overlay & self-updates:** Nginx proxies `/onstep/` to `onstep-webui.service` (`127.0.0.1:8090`, hardened with `ProtectSystem=strict` and Setup PIN authentication via `/etc/onstep-autoprovision/webui.token` on all mutating and camera routes) and injects `/onstep/overlay.js` via `sub_filter` with an APT post-invoke hook (`/etc/apt/apt.conf.d/99-onstep-nginx-overlay`). Daily timers (`onstep-firmware-update.timer` and `astrodrive-update.timer`, opt-out via `AUTO_UPDATE_SOFTWARE`) keep firmware cache and AstroDrive scripts current when online and idle.
 
 ```mermaid
@@ -154,7 +149,7 @@ flowchart LR
     subgraph RPI["Raspberry Pi 3B / 4 / 5"]
         UDEV["udev (/dev/onstep-raw-%k\n& /dev/astrocam)"]
         PROV["onstep_provision.py\n(probe + authorized flash)"]
-        CAM["onstep_camera.py\n(opt-in YUYV EAA stacker)"]
+        CAM["onstep_camera.py\n(YUYV EAA live stacker)"]
         LINK["/dev/onstep"]
         INDI["indi_lx200_OnStep @ 9600"]
         UI["AstroDrive Setup Wizard & Dashboard\n:8090 / /onstep/"]
@@ -168,15 +163,15 @@ flowchart LR
 </details>
 
 <details>
-<summary><strong>Alternative Installs (On-Pi Compiler, Pre-baked CI Image)</strong></summary>
+<summary><strong>Alternative Installs (Skip Camera, On-Pi Compiler, Pre-baked CI Image)</strong></summary>
 
+- **Skip USB camera / OpenCV packages** (minimal mount-only install):
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/0denko/AstroDrive/main/setup.sh | sudo bash -s -- --without-camera
+  ```
 - **Enable on-Pi OnStepX compilation** (installs SHA-256-verified `arduino-cli v1.6.0`; only needed if you edit `Config.h` directly on the Pi):
   ```bash
   curl -fsSL https://raw.githubusercontent.com/0denko/AstroDrive/main/setup.sh | sudo bash -s -- --with-arduino-cli
-  ```
-- **Combine flags** (camera + on-Pi compiler):
-  ```bash
-  curl -fsSL https://raw.githubusercontent.com/0denko/AstroDrive/main/setup.sh | sudo bash -s -- --with-camera --with-arduino-cli
   ```
 - **Pre-baked downloadable `.img.xz`:** Run **Actions → Build Raspberry Pi Overlay Image (.img.xz) → Run workflow** in GitHub Actions to generate a ready-to-flash `.img.xz` with AstroDrive + firmware baked in.
 - **Automated Firmware Builds:** `.github/workflows/build-firmware.yml` compiles both `nodemcu-esp32-tmc2208s` (`esp32:esp32@2.0.17`) and `nodemcu-esp8266-tmc2208s` (`esp8266:esp8266@3.1.2` + `esp8266RfOff` plugin) against the pinned OnStepX commit in `firmware/onstepx.ref` and publishes `.bin` + SHA-256 manifests to [GitHub Releases](https://github.com/0denko/AstroDrive/releases/latest).

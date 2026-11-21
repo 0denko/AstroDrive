@@ -11,6 +11,11 @@ on:
         description: 'Upstream hjd1964/OnStepX commit SHA, branch, or tag (blank = pinned firmware/onstepx.ref)'
         required: false
         default: ''
+      install_camera_in_image:
+        description: 'Bake USB camera & EAA live-stacking packages (v4l-utils, python3-opencv) into image'
+        required: false
+        type: boolean
+        default: true
       install_arduino_cli_in_image:
         description: 'Bake arduino-cli + ESP8266/ESP32 cores into image for on-Pi live compilation'
         required: false
@@ -96,6 +101,7 @@ jobs:
 
       - name: Mount image and apply astro-pi-onstep-autoprovision overlay inside ARM64 chroot
         env:
+          INSTALL_CAMERA: ${{ github.event.inputs.install_camera_in_image }}
           INSTALL_ARDUINO_CLI: ${{ github.event.inputs.install_arduino_cli_in_image }}
           ENABLE_AUTO_FLASH: ${{ github.event.inputs.enable_auto_flash }}
           GITHUB_REPO: ${{ github.repository }}
@@ -133,6 +139,9 @@ jobs:
           sudo cp -a . /mnt/pi/tmp/onstep-overlay/
 
           INSTALL_FLAGS="--chroot --github-repo ${GITHUB_REPO}"
+          if [ "${INSTALL_CAMERA}" = "false" ]; then
+            INSTALL_FLAGS="${INSTALL_FLAGS} --without-camera"
+          fi
           if [ "${INSTALL_ARDUINO_CLI}" = "true" ]; then
             INSTALL_FLAGS="${INSTALL_FLAGS} --with-arduino-cli"
           fi

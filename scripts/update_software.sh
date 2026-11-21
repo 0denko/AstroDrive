@@ -37,7 +37,7 @@ INSTALLED_COMMIT="${INSTALLED_COMMIT:-}"
 INSTALLED_VERSION="${INSTALLED_VERSION:-unknown}"
 INSTALL_WITH_ARDUINO_CLI="${INSTALL_WITH_ARDUINO_CLI:-false}"
 INSTALL_ENABLE_AUTO_FLASH="${INSTALL_ENABLE_AUTO_FLASH:-false}"
-INSTALL_WITH_CAMERA="${INSTALL_WITH_CAMERA:-false}"
+INSTALL_WITH_CAMERA="${INSTALL_WITH_CAMERA:-true}"
 
 write_state() {
   local status="$1"
@@ -137,8 +137,8 @@ fi
 if [ "${INSTALL_ENABLE_AUTO_FLASH}" = "true" ]; then
   INSTALL_ARGS+=(--enable-auto-flash)
 fi
-if [ "${INSTALL_WITH_CAMERA}" = "true" ]; then
-  INSTALL_ARGS+=(--with-camera)
+if [ "${INSTALL_WITH_CAMERA}" = "false" ]; then
+  INSTALL_ARGS+=(--without-camera)
 fi
 
 chmod +x "${SRC_DIR}/install.sh"
