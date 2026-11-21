@@ -46,7 +46,7 @@
 #define TIME_LOCATION_SOURCE          OFF
 #define TIME_LOCATION_PPS_SENSE       OFF
 #define WEATHER                       OFF
-#define STEP_WAVE_FORM                SQUARE
+#define STEP_WAVE_FORM                PULSE
 #define LIMIT_SENSE                   OFF
 #define ST4_INTERFACE                 OFF
 
@@ -55,6 +55,7 @@
 #define MOUNT_ENABLE_IN_STANDBY       OFF
 
 #define AXIS1_STEPS_PER_DEGREE        2560.0
+#define AXIS1_REVERSE                 OFF
 #define AXIS1_LIMIT_MIN               -180
 #define AXIS1_LIMIT_MAX               180
 #define AXIS1_DRIVER_MODEL            TMC2209S
@@ -63,12 +64,12 @@
 #define AXIS1_DRIVER_IHOLD            OFF
 #define AXIS1_DRIVER_IRUN             OFF
 #define AXIS1_DRIVER_IGOTO            OFF
-#define AXIS1_DRIVER_REVERSE          OFF
 #define AXIS1_DRIVER_STATUS           OFF
 #define AXIS1_POWER_DOWN              OFF
 #define AXIS1_SENSE_HOME              OFF
 
 #define AXIS2_STEPS_PER_DEGREE        2560.0
+#define AXIS2_REVERSE                 OFF
 #define AXIS2_LIMIT_MIN               -90
 #define AXIS2_LIMIT_MAX               90
 #define AXIS2_DRIVER_MODEL            TMC2209S
@@ -77,7 +78,6 @@
 #define AXIS2_DRIVER_IHOLD            OFF
 #define AXIS2_DRIVER_IRUN             OFF
 #define AXIS2_DRIVER_IGOTO            OFF
-#define AXIS2_DRIVER_REVERSE          OFF
 #define AXIS2_DRIVER_STATUS           OFF
 #define AXIS2_POWER_DOWN              OFF
 #define AXIS2_SENSE_HOME              OFF

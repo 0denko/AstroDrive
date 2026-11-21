@@ -113,8 +113,18 @@ build_profile() {
   arduino-cli core update-index
   arduino-cli core install "${CORE_SPEC}"
 
+  # Reset upstream src/plugins cleanly so profiles never bleed plugins into each other
+  git -C "${SRC_DIR}" checkout -- src/plugins/Plugins.config.h >/dev/null 2>&1 || true
+  git -C "${SRC_DIR}" clean -fd src/plugins >/dev/null 2>&1 || true
+
   cp "${prof_dir}/Config.h" "${SRC_DIR}/Config.h"
   cp "${prof_dir}/Extended.config.h" "${SRC_DIR}/Extended.config.h"
+  if [ -d "${prof_dir}/plugins" ]; then
+    cp -r "${prof_dir}/plugins/"* "${SRC_DIR}/src/plugins/"
+  fi
+  if [ -f "${prof_dir}/Plugins.config.h" ]; then
+    cp "${prof_dir}/Plugins.config.h" "${SRC_DIR}/src/plugins/Plugins.config.h"
+  fi
 
   local build_dir="${BUILD_ROOT}/${PROFILE_NAME}"
   local out_dir="${OUT_ROOT}/${PROFILE_NAME}"

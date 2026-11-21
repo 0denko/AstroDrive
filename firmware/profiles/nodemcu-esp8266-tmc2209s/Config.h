@@ -51,7 +51,7 @@
 #define TIME_LOCATION_SOURCE          OFF
 #define TIME_LOCATION_PPS_SENSE       OFF
 #define WEATHER                       OFF
-#define STEP_WAVE_FORM                SQUARE
+#define STEP_WAVE_FORM                PULSE   // 1 ISR per step (2x efficiency on ESP8266; TMC2209 needs >=100ns)
 #define LIMIT_SENSE                   OFF
 #define ST4_INTERFACE                 OFF
 
@@ -63,6 +63,7 @@
 // AXIS1 RA: 36H20HM (0.9 deg, 400 steps/rev) * 16 microsteps * 144:1 worm / 360 = 2560.0
 // (If MS1/MS2 are left open for 1/8 microsteps, use 1280.0 instead.)
 #define AXIS1_STEPS_PER_DEGREE        2560.0
+#define AXIS1_REVERSE                 OFF
 #define AXIS1_LIMIT_MIN               -180
 #define AXIS1_LIMIT_MAX               180
 #define AXIS1_DRIVER_MODEL            TMC2209S
@@ -71,7 +72,6 @@
 #define AXIS1_DRIVER_IHOLD            OFF
 #define AXIS1_DRIVER_IRUN             OFF
 #define AXIS1_DRIVER_IGOTO            OFF
-#define AXIS1_DRIVER_REVERSE          OFF
 #define AXIS1_DRIVER_STATUS           OFF
 #define AXIS1_POWER_DOWN              OFF
 #define AXIS1_SENSE_HOME              OFF
@@ -79,6 +79,7 @@
 // AXIS2 DEC: 36H18HM (assumed 0.9 deg, 400 steps/rev) * 16 microsteps * 144:1 / 360 = 2560.0
 // (If 36H18HM turns out to be 1.8 deg / 200 steps/rev, set to 1280.0.)
 #define AXIS2_STEPS_PER_DEGREE        2560.0
+#define AXIS2_REVERSE                 OFF
 #define AXIS2_LIMIT_MIN               -90
 #define AXIS2_LIMIT_MAX               90
 #define AXIS2_DRIVER_MODEL            TMC2209S
@@ -87,16 +88,15 @@
 #define AXIS2_DRIVER_IHOLD            OFF
 #define AXIS2_DRIVER_IRUN             OFF
 #define AXIS2_DRIVER_IGOTO            OFF
-#define AXIS2_DRIVER_REVERSE          OFF
 #define AXIS2_DRIVER_STATUS           OFF
 #define AXIS2_POWER_DOWN              OFF
 #define AXIS2_SENSE_HOME              OFF
 
-// TRACKING & SLEWING (conservative rate for single-core ESP8266)
+// TRACKING & SLEWING (PULSE mode supports 2.0 deg/s cleanly on 160 MHz ESP8266)
 #define TRACK_AUTOSTART               OFF
 #define TRACK_COMPENSATION_DEFAULT    OFF
 #define TRACK_BACKLASH_RATE           25
-#define SLEW_RATE_BASE_DESIRED        1.5
+#define SLEW_RATE_BASE_DESIRED        2.0
 #define SLEW_RATE_MEMORY              OFF
 #define SLEW_ACCELERATION_DIST        5.0
 #define SLEW_RAPID_STOP_DIST          2.0
